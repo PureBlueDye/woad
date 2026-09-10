@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "woad",
+  "version": "${version}",
+  "name": "Woad",
+  "authors": ["Pure_Blue_Dye"],
+  "license": "MIT",
+  "icon": "assets/woad/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.pureblue.woad.WoadClient"
+    ]
+  },
+  "mixins": [
+    "woad.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~26.1.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

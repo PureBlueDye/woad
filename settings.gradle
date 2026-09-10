@@ -1,0 +1,14 @@
+pluginManagement {
+    repositories {
+        maven { url = "https://maven.fabricmc.net/" }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+plugins {
+    // Lets Gradle auto-download the JDK 21 required by the toolchain if none is present.
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.9.0'
+}
+
+rootProject.name = "dyeaddon"

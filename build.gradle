@@ -1,0 +1,70 @@
+plugins {
+    id 'fabric-loom' version '1.17.13'
+    id 'java'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    mavenCentral()
+    maven { url = "https://maven.fabricmc.net/" }
+}
+
+loom {
+    // MC 26.x ships de-obfuscated and Fabric no longer produces intermediary for it.
+    noIntermediateMappings()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    // MC 26.x is de-obfuscated: Fabric meta pins the placeholder identity intermediary "0.0.0",
+    // which keeps the jar's own (Mojang) names as-is.
+    mappings "net.fabricmc:intermediary:0.0.0:v2"
+    // Plain implementation (not modImplementation): with identity mappings nothing needs remapping,
+    // and this skips the (broken) remap of the fabric-api sources jar. Same approach as NoammAddons.
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    // fabric-loader does not pull these transitively when used as a plain dependency, and the
+    // mixins need them at compile time. The loader provides both at runtime.
+    implementation "net.fabricmc:sponge-mixin:${project.mixin_version}"
+    implementation "io.github.llamalad7:mixinextras-fabric:${project.mixinextras_version}"
+    // The dev launcher needs ASM on the classpath; the real loader ships its own copy, so these
+    // are runtime-only and never end up in the jar.
+    runtimeOnly "org.ow2.asm:asm:9.8"
+    runtimeOnly "org.ow2.asm:asm-analysis:9.8"
+    runtimeOnly "org.ow2.asm:asm-commons:9.8"
+    runtimeOnly "org.ow2.asm:asm-tree:9.8"
+    runtimeOnly "org.ow2.asm:asm-util:9.8"
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
+
+java {
+    // Minecraft 26.x requires Java 25. The foojay plugin (settings.gradle) downloads the JDK
+    // if it is not installed locally.
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    // No sources jar: identity mappings have no "named" namespace for loom to remap into.
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = "UTF-8"
+    it.options.release = 25
+}
+
+jar {
+    from("LICENSE") {
+        rename { "${it}_${project.archivesBaseName}" }
+    }
+}

@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.pureblue.woad.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "ClientConnectionMixin",
+    "SpriteContentsMixin",
+    "HandledScreenAccessor",
+    "HandledScreenMixin",
+    "ChatHudAccessor",
+    "ConnectionBindMixin",
+    "ItemRefreshMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

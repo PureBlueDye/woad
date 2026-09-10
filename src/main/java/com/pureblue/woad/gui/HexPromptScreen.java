@@ -1,0 +1,91 @@
+package com.pureblue.woad.gui;
+
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.network.chat.Component;
+
+import java.util.function.IntConsumer;
+
+/** Tiny popup to type a hex colour; calls {@code onConfirm} with the parsed 0xRRGGBB value. */
+public class HexPromptScreen extends Screen {
+
+    private static final int PANEL_W = 160;
+    private static final int PANEL_H = 96;
+
+    private final Screen parent;
+    private final String initial;
+    private final IntConsumer onConfirm;
+    private EditBox field;
+
+    public HexPromptScreen(Screen parent, String initialHex, IntConsumer onConfirm) {
+        super(Component.literal("Hex color"));
+        this.parent = parent;
+        this.initial = initialHex;
+        this.onConfirm = onConfirm;
+    }
+
+    @Override
+    protected void init() {
+        int left = (this.width - PANEL_W) / 2;
+        int top = (this.height - PANEL_H) / 2;
+
+        this.field = new EditBox(this.font, left + 20, top + 36, PANEL_W - 40, 18,
+            Component.literal("hex"));
+        this.field.setMaxLength(7);
+        this.field.setValue(initial);
+        this.setInitialFocus(this.field);
+        this.addRenderableWidget(this.field);
+
+        int btnW = (PANEL_W - 40 - 6) / 2;
+        this.addRenderableWidget(Button.builder(Component.literal("OK"), b -> confirm())
+            .bounds(left + 20, top + 62, btnW, 20).build());
+        this.addRenderableWidget(Button.builder(Component.literal("Cancel"), b -> onClose())
+            .bounds(left + 20 + btnW + 6, top + 62, btnW, 20).build());
+    }
+
+    private void confirm() {
+        Integer rgb = parseHex(this.field.getValue());
+        if (rgb != null) {
+            onConfirm.accept(rgb);
+        }
+        onClose();
+    }
+
+    @Override
+    public void onClose() {
+        this.minecraft.setScreen(parent);
+    }
+
+    static Integer parseHex(String text) {
+        String s = text.trim();
+        if (s.startsWith("#")) {
+            s = s.substring(1);
+        }
+        if (s.length() != 6) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(s, 16);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    @Override
+    public void extractRenderState(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
+        int left = (this.width - PANEL_W) / 2;
+        int top = (this.height - PANEL_H) / 2;
+        ctx.fill(0, 0, this.width, this.height, 0x80000000);
+        ctx.fill(left, top, left + PANEL_W, top + PANEL_H, 0xF0101010);
+        ctx.centeredText(this.font, Component.literal("Hex color"),
+            this.width / 2, top + 12, 0xFFFFFFFF);
+        super.extractRenderState(ctx, mouseX, mouseY, delta);
+    }
+
+    @Override
+    public void extractBackground(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
+        // Dim drawn in render().
+    }
+}
