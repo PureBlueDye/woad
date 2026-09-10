@@ -2,9 +2,6 @@
 
 A client-side Fabric mod for Hypixel SkyBlock, built for **Minecraft 26.1.2**.
 
-Everything runs on your own client: nothing is sent to the server that a vanilla
-client would not send, and no feature gives an advantage the server can see.
-
 ## Features
 
 | Feature | What it does |
