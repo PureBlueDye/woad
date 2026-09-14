@@ -32,14 +32,41 @@ public final class CoflnetClient {
 
     private CoflnetClient() {}
 
-    /** An item as Coflnet knows it: display name and the internal tag used by every other call. */
-    public record Item(String name, String tag) {}
+    /**
+     * An item as Coflnet knows it.
+     *
+     * @param name    display name, cleaned of the source suffix
+     * @param tag     the internal tag used by every other call
+     * @param bazaar  true when it is sold on the bazaar, where there are no auctions to filter
+     */
+    public record Item(String name, String tag, boolean bazaar) {}
+
+    /**
+     * How a filter is matched, as Coflnet declares it in {@code longType}.
+     *
+     * <p>This is what makes filtering generic: the shape of a filter is data, not something the mod
+     * has to know per item. A {@link #NUMBER} carries {@code [minimum, maximum]} in its options
+     * rather than a list of values, and a {@link #BOOLEAN} carries the two spellings it accepts.
+     */
+    public enum Kind {
+        /** Pick one of the listed values, e.g. {@code Reforge} or {@code AbilityScroll}. */
+        ENUM,
+        /** A number within the range its two options give, e.g. {@code Stars} or {@code sharpness}. */
+        NUMBER,
+        /** On or off, e.g. {@code Recombobulated}. */
+        BOOLEAN,
+        /** Dates and free text: nothing a price question asks for. */
+        OTHER
+    }
 
     /** One filter the auction house accepts for an item, with the values it allows. */
-    public record Filter(String name, List<String> options) {}
+    public record Filter(String name, List<String> options, Kind kind) {}
 
     /** One active listing: its asking price, who put it up, and the id for {@code /viewauction}. */
     public record Auction(long price, String seller, String uuid) {}
+
+    /** A bazaar product's two sides: what you pay to buy now, what you get selling now. */
+    public record Bazaar(long buyPrice, long sellPrice) {}
 
     /**
      * Resolves a written name to an item. The search only matches short terms well, so longer
@@ -77,7 +104,10 @@ public final class CoflnetClient {
                 int total = 0;
                 int matched = 0;
                 for (String word : item.name().toLowerCase(java.util.Locale.ROOT).split("[^a-z0-9]+")) {
-                    if (word.length() < 3) continue;
+                    // Numbers count even though they are short: the "7" is what separates
+                    // "sharpness 7 enchant" from every other sharpness book, and without it a
+                    // one-word item called "Book" outscored the right answer.
+                    if (word.length() < 3 && !word.matches("\\d+")) continue;
                     total++;
                     if (lower.contains(word)) matched++;
                 }
@@ -103,10 +133,21 @@ public final class CoflnetClient {
             if (!entry.has("id") || !entry.has("name")) continue;
             // "not on ah" entries exist for abilities and the like; they have no auctions.
             String name = entry.get("name").getAsString();
-            if (name.toLowerCase(java.util.Locale.ROOT).contains("not on ah")) continue;
-            items.add(new Item(name, entry.get("id").getAsString()));
+            String lower = name.toLowerCase(java.util.Locale.ROOT);
+            if (lower.contains("not on ah")) continue;
+            // Coflnet marks where an item trades by appending " - bazaar" to its name. Keep those:
+            // enchanted books and materials are items players ask the price of just as often, they
+            // simply have to be priced from the bazaar instead of from auctions.
+            boolean bazaar = lower.contains("- bazaar");
+            items.add(new Item(cleanName(name), entry.get("id").getAsString(), bazaar));
         }
         return items;
+    }
+
+    /** Drops the " - bazaar" marker Coflnet appends: it is plumbing, not part of the item's name. */
+    private static String cleanName(String name) {
+        int dash = name.lastIndexOf(" - ");
+        return dash > 0 ? name.substring(0, dash).trim() : name;
     }
 
     /** The filters this item accepts, straight from Coflnet — names and allowed values. */
@@ -123,9 +164,42 @@ public final class CoflnetClient {
                     options.add(option.getAsString());
                 }
             }
-            filters.add(new Filter(entry.get("name").getAsString(), options));
+            String longType = entry.has("longType") && !entry.get("longType").isJsonNull()
+                    ? entry.get("longType").getAsString() : "";
+            filters.add(new Filter(entry.get("name").getAsString(), options, kindOf(longType)));
         }
         return filters;
+    }
+
+    /**
+     * Reads Coflnet's {@code longType} — "Equal", "NUMERICAL, RANGE", "BOOLEAN", "LOWER, DATE"… —
+     * into the shape the matcher needs. Order matters: "Equal, SIMPLE, BOOLEAN" is a boolean.
+     */
+    private static Kind kindOf(String longType) {
+        String type = longType.toUpperCase(java.util.Locale.ROOT);
+        if (type.contains("DATE") || type.contains("TEXT")) return Kind.OTHER;
+        if (type.contains("BOOLEAN")) return Kind.BOOLEAN;
+        if (type.contains("NUMERICAL")) return Kind.NUMBER;
+        return Kind.ENUM;
+    }
+
+    /**
+     * Bazaar prices for a product.
+     *
+     * <p>{@code buyPrice} is the instant-buy side and {@code sellPrice} the instant-sell side, so
+     * the pair is the spread. Auction endpoints return nothing at all for these items, which is why
+     * a bazaar item used to answer "no BIN on the auction house".
+     *
+     * @return the two prices, or {@code null} when this tag is not a bazaar product
+     */
+    public static Bazaar bazaar(String tag) {
+        JsonElement body = get(BASE + "/bazaar/" + encode(tag) + "/snapshot");
+        if (body == null || !body.isJsonObject()) return null;
+        JsonObject json = body.getAsJsonObject();
+        if (!json.has("buyPrice") || !json.has("sellPrice")) return null;
+        long buy = Math.round(json.get("buyPrice").getAsDouble());
+        long sell = Math.round(json.get("sellPrice").getAsDouble());
+        return buy <= 0 && sell <= 0 ? null : new Bazaar(buy, sell);
     }
 
     /**
