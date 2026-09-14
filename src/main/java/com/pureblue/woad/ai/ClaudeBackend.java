@@ -99,7 +99,7 @@ public class ClaudeBackend implements AiBackend {
         return HTTP.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
                 .thenApply(resp -> {
                     if (resp.statusCode() / 100 != 2) {
-                        throw new RuntimeException("Claude HTTP " + resp.statusCode());
+                        throw new RuntimeException(explainError(resp.statusCode(), resp.body()));
                     }
                     JsonObject json = JsonParser.parseString(resp.body()).getAsJsonObject();
                     if (json.has("stop_reason") && !json.get("stop_reason").isJsonNull()
@@ -115,5 +115,33 @@ public class ClaudeBackend implements AiBackend {
                     }
                     throw new RuntimeException("Claude returned no text");
                 });
+    }
+
+    /**
+     * Turns an error response into something a player can act on.
+     *
+     * <p>"HTTP 401" says nothing while you are setting the key up. The API answers with
+     * {@code {"error": {"type": ..., "message": ...}}}, and its message names the real cause —
+     * wrong key, no credit left, unknown model id — so it is worth showing in chat.
+     */
+    private static String explainError(int status, String body) {
+        String detail = "";
+        try {
+            JsonObject error = JsonParser.parseString(body).getAsJsonObject()
+                    .getAsJsonObject("error");
+            if (error != null && error.has("message")) {
+                detail = ": " + error.get("message").getAsString();
+            }
+        } catch (RuntimeException ignored) {
+            // Not JSON (a proxy or gateway error page): the status code is all we have.
+        }
+        String hint = switch (status) {
+            case 401 -> " (check the API key)";
+            case 400 -> " (check the model id)";
+            case 402 -> " (no credit left on the account)";
+            case 429 -> " (rate limited, try again in a moment)";
+            default -> "";
+        };
+        return "Claude HTTP " + status + hint + detail;
     }
 }

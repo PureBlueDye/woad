@@ -64,7 +64,9 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 jar {
+    // Ship the licence inside the jar, named after the mod. Gradle removed
+    // project.archivesBaseName; the name now lives on the base extension.
     from("LICENSE") {
-        rename { "${it}_${project.archivesBaseName}" }
+        rename { "${it}_${base.archivesName.get()}" }
     }
 }
