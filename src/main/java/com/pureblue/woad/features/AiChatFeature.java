@@ -56,6 +56,21 @@ public class AiChatFeature extends Feature {
             "^(?:(?:\\[[^\\]]*\\]|[^\\s\\w:])\\s*)*(\\w{1,16})(?:\\s+\\[[^\\]]+\\])?: (.+)$");
 
     /**
+     * Private messages. Hypixel shows both sides of a whisper: {@code From [MVP+] Player: text} is
+     * someone writing to us, {@code To [MVP+] Player: text} is what we sent them.
+     *
+     * <p>Both matter. "From" is a question to answer; "To" is the other half of the conversation,
+     * and it is also how the local player reaches the AI — typing {@code /msg Bob !ai …} should
+     * answer Bob, exactly as asking in party chat answers the party. In both cases the name in the
+     * line is the person to reply to, which is why the whisper target travels with the message
+     * instead of being fixed per channel like {@code /pc} and {@code /gc}.
+     */
+    private static final Pattern WHISPER_FROM =
+            Pattern.compile("^From (?:\\[[^\\]]+\\] )?(\\w{1,16})(?: \\[[^\\]]+\\])?: (.+)$");
+    private static final Pattern WHISPER_TO =
+            Pattern.compile("^To (?:\\[[^\\]]+\\] )?(\\w{1,16})(?: \\[[^\\]]+\\])?: (.+)$");
+
+    /**
      * The model asks for an action with: {@code [CMD] <action> <player>}. Only the allowed actions
      * are part of the pattern, so a stray "CMD" in a sentence cannot trigger anything, and the
      * brackets / punctuation around the marker are optional — models format it loosely.
@@ -135,6 +150,10 @@ public class AiChatFeature extends Feature {
     private final BooleanSetting inAll = addSetting(new BooleanSetting("All chat",
             "Answer questions asked in public chat.", false));
 
+    private final BooleanSetting inWhisper = addSetting(new BooleanSetting("Private messages",
+            "Answer questions whispered with /msg. The reply is whispered back to that player.",
+            true));
+
     private final BooleanSetting inSolo = addSetting(new BooleanSetting("Solo / other servers",
             "Answer in normal chat outside Hypixel (singleplayer worlds, vanilla servers). "
                     + "Handy for testing.", true));
@@ -162,12 +181,25 @@ public class AiChatFeature extends Feature {
      */
     private final Deque<ChatMessage> history = new ArrayDeque<>();
 
-    /** A line waiting to be sent, and the channel it belongs to. */
-    private record Outgoing(Channel channel, String text) {}
+    /** A line waiting to be sent, with the command that carries it ({@code null} for plain chat). */
+    private record Outgoing(String command, String text) {}
 
     /** Lines waiting their turn, so two never leave the client in the same tick. */
     private final Deque<Outgoing> outbox = new ArrayDeque<>();
     private int sendCooldown = 0;
+
+    /**
+     * A question waiting to be answered.
+     *
+     * @param whisperTarget the player to whisper the answer back to, {@code null} outside whispers
+     */
+    private record Pending(String sender, String question, Channel channel, String whisperTarget) {}
+
+    /** Questions asked faster than the cooldown allows answering them. */
+    private final Deque<Pending> inbox = new ArrayDeque<>();
+
+    /** Beyond this many waiting questions it is a flood, not a conversation. */
+    private static final int MAX_PENDING = 5;
 
     public AiChatFeature() {
         super("ai_chat", "AI Chat",
@@ -180,6 +212,25 @@ public class AiChatFeature extends Feature {
 
     @Override
     public void onChatMessage(String message) {
+        // Whispers are checked first: "From Bob: hi" would otherwise be swallowed by the public
+        // chat pattern, which accepts anything shaped like "<words> Name: text".
+        Matcher whisper = WHISPER_FROM.matcher(message);
+        boolean incoming = whisper.matches();
+        boolean outgoing = false;
+        if (!incoming) {
+            whisper = WHISPER_TO.matcher(message);
+            outgoing = whisper.matches();
+        }
+        if (incoming || outgoing) {
+            if (!channelEnabled(Channel.WHISPER)) return;
+            String other = whisper.group(1);
+            // The name in the line is the person at the other end either way: the sender of a
+            // "From", the recipient of a "To" — and the reply is whispered to them.
+            String sender = outgoing ? Minecraft.getInstance().getUser().getName() : other;
+            tryAnswer(sender, whisper.group(2).trim(), Channel.WHISPER, other);
+            return;
+        }
+
         Channel channel = null;
         Matcher matcher = PARTY.matcher(message);
         if (matcher.matches()) {
@@ -191,7 +242,7 @@ public class AiChatFeature extends Feature {
         }
         if (channel == null || !channelEnabled(channel)) return;
 
-        tryAnswer(matcher.group(1), matcher.group(2).trim(), channel);
+        tryAnswer(matcher.group(1), matcher.group(2).trim(), channel, null);
     }
 
     /**
@@ -202,11 +253,11 @@ public class AiChatFeature extends Feature {
     @Override
     public void onPlayerChatMessage(String sender, String content) {
         if (!inSolo.enabled() || content == null) return;
-        tryAnswer(sender, content.trim(), Channel.DIRECT);
+        tryAnswer(sender, content.trim(), Channel.DIRECT, null);
     }
 
-    /** Shared path: check the trigger, then ask the model and answer in {@code channel}. */
-    private void tryAnswer(String sender, String body, Channel channel) {
+    /** Shared path: check the trigger, then queue the question for answering. */
+    private void tryAnswer(String sender, String body, Channel channel, String whisperTarget) {
         if (!lastSentReply.isEmpty() && body.equals(lastSentReply)) return; // never answer ourselves
 
         // Remember everything players say here, not just questions — that is the conversation
@@ -219,13 +270,39 @@ public class AiChatFeature extends Feature {
         String question = body.substring(prefix.length()).trim();
         if (question.isEmpty()) return;
 
+        // Two questions arriving within the cooldown used to mean the second one was dropped on the
+        // floor and never answered. They wait their turn instead, and pump() releases them as the
+        // cooldown allows — the delay is about not being kicked for spam, not about ignoring people.
+        if (inbox.size() >= MAX_PENDING) {
+            LOGGER.warn("[AI] {} questions already waiting, ignoring one from {}", inbox.size(), sender);
+            return;
+        }
+        inbox.add(new Pending(sender, question, channel, whisperTarget));
+        pump();
+    }
+
+    /**
+     * Answers the oldest waiting question, if the spam cooldown has passed.
+     *
+     * <p>Called when a question arrives and again on every tick, so a queued one still goes out
+     * once its turn comes even though nothing else happens in chat.
+     */
+    private void pump() {
+        if (inbox.isEmpty()) return;
         long now = System.currentTimeMillis();
         if (now - lastReplyAt < COOLDOWN_MS) return;
         lastReplyAt = now;
+        answerNow(inbox.poll());
+    }
 
-        // The question we are about to answer was itself a /pc or /gc command from this account
-        // when the local player asked it, so our reply must not follow it immediately.
-        if (channel.command != null && isLocalPlayer(sender)) deferSending();
+    /** Runs one question: a party command, a price lookup, or the model. */
+    private void answerNow(Pending pending) {
+        String sender = pending.sender();
+        String question = pending.question();
+
+        // The question we are about to answer was itself a /pc, /gc or /msg command from this
+        // account when the local player asked it, so our reply must not follow it immediately.
+        if (usesCommand(pending.channel()) && isLocalPlayer(sender)) deferSending();
 
         // Party management is handled here, not by the model: small models keep answering "I can't
         // run commands" however the prompt is written. This is also instant and costs no tokens.
@@ -234,7 +311,7 @@ public class AiChatFeature extends Feature {
             if (direct != null) {
                 LOGGER.info("[AI] {} asked for a command: /{}", sender, direct);
                 runCommand(direct);
-                sendReply(channel, "OK: " + direct.substring(2)); // drop the leading "p "
+                sendReply(pending, "OK: " + direct.substring(2)); // drop the leading "p "
                 return;
             }
         }
@@ -242,26 +319,24 @@ public class AiChatFeature extends Feature {
         // Auction prices come from Coflnet, not from the model: it cannot know today's market and
         // would happily invent a number. Falls through to the model when nothing matches.
         if (priceLookup.enabled() && PriceLookup.isPriceQuestion(question)) {
-            final Channel priceChannel = channel;
-            final String asked = question;
-            CompletableFuture.supplyAsync(() -> PriceLookup.answer(asked))
+            CompletableFuture.supplyAsync(() -> PriceLookup.answer(question))
                     .thenAccept(line -> Minecraft.getInstance().execute(() -> {
-                        if (line != null) sendReply(priceChannel, line);
-                        else askModel(priceChannel, asked, sender);
+                        if (line != null) sendReply(pending, line);
+                        else askModel(pending);
                     }))
                     .exceptionally(error -> {
                         LOGGER.warn("[AI] price lookup failed", error);
-                        Minecraft.getInstance().execute(() -> askModel(priceChannel, asked, sender));
+                        Minecraft.getInstance().execute(() -> askModel(pending));
                         return null;
                     });
             return;
         }
 
-        askModel(channel, question, sender);
+        askModel(pending);
     }
 
     /** Sends the conversation to the configured backend and answers with what comes back. */
-    private void askModel(Channel channel, String question, String sender) {
+    private void askModel(Pending pending) {
         AiBackend ai = buildBackend();
         if (ai == null) {
             sendModMessage(Component.literal("AI is not configured (missing API key).").withStyle(ChatFormatting.RED));
@@ -269,12 +344,12 @@ public class AiChatFeature extends Feature {
         }
 
         List<ChatMessage> conversation = new ArrayList<>(history);
-        LOGGER.info("[AI] {} asked in {}: {} ({} remembered)", sender, channel.label, question, conversation.size());
+        LOGGER.info("[AI] {} asked in {}: {} ({} remembered)",
+                pending.sender(), pending.channel().label, pending.question(), conversation.size());
 
-        final Channel replyChannel = channel;
         ai.complete(systemPrompt(), conversation)
                 .thenAccept(reply -> Minecraft.getInstance()
-                        .execute(() -> handleReply(replyChannel, reply)))
+                        .execute(() -> handleReply(pending, reply)))
                 .exceptionally(error -> {
                     LOGGER.warn("[AI] request failed", error);
                     Minecraft.getInstance().execute(() -> sendModMessage(
@@ -283,8 +358,8 @@ public class AiChatFeature extends Feature {
                 });
     }
 
-    /** Runs any requested command, then sends the remaining text back to the same channel. */
-    private void handleReply(Channel channel, String rawReply) {
+    /** Runs any requested command, then sends the remaining text back where the question came from. */
+    private void handleReply(Pending pending, String rawReply) {
         String reply = rawReply == null ? "" : rawReply.trim();
 
         Matcher directive = COMMAND_DIRECTIVE.matcher(reply);
@@ -307,11 +382,11 @@ public class AiChatFeature extends Feature {
             sendModMessage(Component.literal("AI returned an empty answer.").withStyle(ChatFormatting.RED));
             return;
         }
-        sendReply(channel, reply);
+        sendReply(pending, reply);
     }
 
-    /** Tags the answer, remembers it, and queues it for the channel the question came from. */
-    private void sendReply(Channel channel, String reply) {
+    /** Tags the answer, remembers it, and queues it for wherever the question came from. */
+    private void sendReply(Pending pending, String reply) {
         int room = MAX_REPLY_LENGTH - AI_TAG.length();
         if (reply.length() > room) {
             reply = reply.substring(0, room - 3).trim() + "...";
@@ -322,7 +397,20 @@ public class AiChatFeature extends Feature {
         // The tag goes out with the message, and is what public chat echoes back at us.
         String tagged = AI_TAG + reply;
         lastSentReply = tagged;
-        outbox.add(new Outgoing(channel, tagged));
+        outbox.add(new Outgoing(replyCommand(pending), tagged));
+    }
+
+    /**
+     * The command that carries a reply, or {@code null} to speak in plain chat.
+     *
+     * <p>A whisper is the one case where the command depends on the message rather than the
+     * channel, because it names the player to answer.
+     */
+    private static String replyCommand(Pending pending) {
+        if (pending.channel() == Channel.WHISPER) {
+            return pending.whisperTarget() == null ? null : "msg " + pending.whisperTarget();
+        }
+        return pending.channel().command;
     }
 
     /**
@@ -335,6 +423,10 @@ public class AiChatFeature extends Feature {
      */
     @Override
     public void onClientTick() {
+        // A question held back by the spam cooldown is answered as soon as its turn comes, which
+        // may well be while chat is silent — so this has to be driven by the clock, not by chat.
+        pump();
+
         if (sendCooldown > 0) {
             sendCooldown--;
             return;
@@ -345,10 +437,10 @@ public class AiChatFeature extends Feature {
         if (network == null) return; // not connected yet: hold the line until we are
 
         Outgoing out = outbox.poll();
-        if (out.channel().command == null) {
+        if (out.command() == null) {
             network.sendChat(out.text()); // singleplayer / vanilla: plain chat, no /ac
         } else {
-            network.sendCommand(out.channel().command + " " + out.text());
+            network.sendCommand(out.command() + " " + out.text());
         }
         sendCooldown = TICKS_BETWEEN_SENDS;
     }
@@ -468,6 +560,7 @@ public class AiChatFeature extends Feature {
     protected void onDisabled() {
         history.clear();
         outbox.clear();
+        inbox.clear();
         sendCooldown = 0;
         lastSentReply = "";
     }
@@ -627,8 +720,19 @@ public class AiChatFeature extends Feature {
             case PARTY -> inParty.enabled();
             case GUILD -> inGuild.enabled();
             case ALL -> inAll.enabled();
+            case WHISPER -> inWhisper.enabled();
             case DIRECT -> inSolo.enabled();
         };
+    }
+
+    /**
+     * Whether answering this message means sending a command rather than plain chat.
+     *
+     * <p>Hypixel throttles consecutive commands, and a whisper is one even though its channel has no
+     * fixed command attached.
+     */
+    private static boolean usesCommand(Channel channel) {
+        return channel.command != null || channel == Channel.WHISPER;
     }
 
     /** True when the message came from this client's own player. */
@@ -648,6 +752,8 @@ public class AiChatFeature extends Feature {
         PARTY("party", "pc"),
         GUILD("guild", "gc"),
         ALL("public", "ac"),
+        /** A whisper: the command is built per message, since it carries the recipient's name. */
+        WHISPER("dm", null),
         DIRECT("public", null);
 
         final String label;
