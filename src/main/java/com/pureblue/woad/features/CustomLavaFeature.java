@@ -14,9 +14,7 @@ public class CustomLavaFeature extends Feature {
     private final LavaPanel panel = new LavaPanel();
 
     public CustomLavaFeature() {
-        super("custom_lava", "Custom Lava",
-                "Recolor lava or render it as water. Pick a base color, build a palette, type a hex, "
-                        + "or switch the lava/water texture, then Apply.",
+        super("custom_lava", "Custom Lava", "",
                 true);
     }
 
@@ -32,7 +30,7 @@ public class CustomLavaFeature extends Feature {
 
     @Override
     public void renderPanel(GuiGraphicsExtractor ctx, Screen parent, int x, int top, int right, int bottom, int mouseX, int mouseY) {
-        panel.render(ctx, x, top, right, bottom, mouseX, mouseY);
+        panel.render(ctx, parent, x, top, right, bottom, mouseX, mouseY);
     }
 
     @Override

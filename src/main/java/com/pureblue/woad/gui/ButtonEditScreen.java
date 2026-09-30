@@ -3,102 +3,116 @@ package com.pureblue.woad.gui;
 import com.pureblue.woad.config.ConfigStore;
 import com.pureblue.woad.features.InventoryButtonsFeature;
 import com.pureblue.woad.features.InventoryButtonsFeature.CmdButton;
+import com.pureblue.woad.ui.Theme;
+import com.pureblue.woad.ui.UiButton;
+import com.pureblue.woad.ui.UiPanel;
+import com.pureblue.woad.ui.UiScreen;
+import com.pureblue.woad.ui.UiText;
+import com.pureblue.woad.ui.UiTextField;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.world.item.ItemStack;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.ItemStack;
+import org.lwjgl.glfw.GLFW;
 
 /** Per-button editor: the command it runs plus its inside (an item id or a label/number). */
-public class ButtonEditScreen extends Screen {
+public class ButtonEditScreen extends UiScreen {
 
     private static final int PANEL_W = 250;
-    private static final int PANEL_H = 172;
+    private static final int PAD = 14;
 
     private final Screen parent;
-    private final InventoryButtonsFeature feature;
     private final CmdButton button;
 
-    private EditBox commandField;
-    private EditBox itemField;
-    private EditBox labelField;
+    private final UiTextField commandField;
+    private final UiTextField itemField;
+    private final UiTextField labelField;
+    private final UiButton cancel = add(new UiButton("Cancel", UiButton.Variant.GHOST, this::onClose));
+    private final UiButton ok = add(new UiButton("OK", UiButton.Variant.PRIMARY, this::confirm));
 
     public ButtonEditScreen(Screen parent, InventoryButtonsFeature feature, CmdButton button) {
         super(Component.literal("Edit button"));
         this.parent = parent;
-        this.feature = feature;
         this.button = button;
+        commandField = add(new UiTextField(button.command == null ? "" : button.command, 256).placeholder("warp dungeon_hub"));
+        itemField = add(new UiTextField(button.item == null ? "" : button.item, 128).placeholder("diamond_sword"));
+        labelField = add(new UiTextField(button.label == null ? "" : button.label, 16));
     }
 
     @Override
     protected void init() {
-        int left = (this.width - PANEL_W) / 2;
-        int top = (this.height - PANEL_H) / 2;
-        int fw = PANEL_W - 32;
-
-        commandField = new EditBox(this.font, left + 16, top + 34, fw, 18, Component.literal("command"));
-        commandField.setMaxLength(256);
-        commandField.setValue(button.command == null ? "" : button.command);
-        this.addRenderableWidget(commandField);
-        this.setInitialFocus(commandField);
-
-        // Item field is a little narrower to leave room for the preview icon.
-        itemField = new EditBox(this.font, left + 16, top + 72, fw - 22, 18, Component.literal("item"));
-        itemField.setMaxLength(128);
-        itemField.setValue(button.item == null ? "" : button.item);
-        this.addRenderableWidget(itemField);
-
-        labelField = new EditBox(this.font, left + 16, top + 110, fw, 18, Component.literal("label"));
-        labelField.setMaxLength(16);
-        labelField.setValue(button.label == null ? "" : button.label);
-        this.addRenderableWidget(labelField);
-
-        int btnW = (fw - 6) / 2;
-        this.addRenderableWidget(Button.builder(Component.literal("OK"), b -> confirm())
-            .bounds(left + 16, top + 140, btnW, 20).build());
-        this.addRenderableWidget(Button.builder(Component.literal("Cancel"), b -> onClose())
-            .bounds(left + 16 + btnW + 6, top + 140, btnW, 20).build());
+        addWidget(commandField.box());
+        addWidget(itemField.box());
+        addWidget(labelField.box());
+        setInitialFocus(commandField.box());
     }
 
     private void confirm() {
-        button.command = commandField.getValue().trim();
-        button.item = itemField.getValue().trim();
-        button.label = labelField.getValue().trim();
+        button.command = commandField.value().trim();
+        button.item = itemField.value().trim();
+        button.label = labelField.value().trim();
         ConfigStore.save();
         onClose();
     }
 
     @Override
     public void onClose() {
-        this.minecraft.setScreen(parent);
+        if (this.minecraft != null) this.minecraft.setScreen(parent);
     }
 
     @Override
-    public void extractRenderState(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
-        int left = (this.width - PANEL_W) / 2;
-        int top = (this.height - PANEL_H) / 2;
-        ctx.fill(0, 0, this.width, this.height, 0x80000000);
-        ctx.fill(left, top, left + PANEL_W, top + PANEL_H, 0xF0101010);
-
-        ctx.text(this.font, "Command", left + 16, top + 22, 0xFFB0B0B8, false);
-        ctx.text(this.font, "Item id, or skull:<player / texture> (optional)", left + 16, top + 60, 0xFFB0B0B8, false);
-        ctx.text(this.font, "Label / number (optional)", left + 16, top + 98, 0xFFB0B0B8, false);
-
-        super.extractRenderState(ctx, mouseX, mouseY, delta);
-
-        // Live item preview to the right of the item field.
-        ItemStack preview = InvButtonRenderer.resolveItem(itemField.getValue());
-        int px = left + 16 + (PANEL_W - 32) - 18;
-        int py = top + 72;
-        ctx.fill(px, py, px + 18, py + 18, 0xFF202028);
-        if (!preview.isEmpty()) {
-            ctx.item(preview, px + 1, py + 1);
+    public boolean keyPressed(KeyEvent input) {
+        if (input.key() == GLFW.GLFW_KEY_ENTER || input.key() == GLFW.GLFW_KEY_KP_ENTER) {
+            confirm();
+            return true;
         }
+        return super.keyPressed(input);
     }
 
     @Override
-    public void extractBackground(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
-        // Dim drawn in render().
+    protected void renderContent(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
+        float fieldW = PANEL_W - PAD * 2;
+        float h = PAD + 13 + 3 * (11 + Theme.FIELD_H + 8) + 4 + Theme.BUTTON_H_SMALL + PAD;
+        float x = Math.round((this.width - PANEL_W) / 2f);
+        float y = Math.round((this.height - h) / 2f);
+        UiPanel.panel(ctx, x, y, PANEL_W, h);
+
+        float cy = y + PAD;
+        UiText.draw(ctx, "Edit button", UiText.Style.HEADING, x + PAD, cy, Theme.TEXT);
+        cy += 17;
+
+        label(ctx, "Command", x + PAD, cy);
+        commandField.bounds(x + PAD, cy + 9, fieldW, Theme.FIELD_H).render(ctx, mouseX, mouseY);
+        cy += 11 + Theme.FIELD_H + 8;
+
+        // The item field leaves room for a live preview of what the button will show.
+        label(ctx, "Item id, or skull:<player / texture> (optional)", x + PAD, cy);
+        float slot = Theme.FIELD_H;
+        itemField.bounds(x + PAD, cy + 9, fieldW - slot - 6, Theme.FIELD_H).render(ctx, mouseX, mouseY);
+        float sx = x + PAD + fieldW - slot;
+        float sy = cy + 9;
+        ItemStack preview = InvButtonRenderer.resolveItem(itemField.value());
+        UiPanel.slot(ctx, sx, sy, slot, 0f, !preview.isEmpty());
+        if (!preview.isEmpty()) ctx.item(preview, Math.round(sx + 1), Math.round(sy + 1));
+        cy += 11 + Theme.FIELD_H + 8;
+
+        label(ctx, "Label / number (optional)", x + PAD, cy);
+        labelField.bounds(x + PAD, cy + 9, fieldW, Theme.FIELD_H).render(ctx, mouseX, mouseY);
+        cy += 11 + Theme.FIELD_H + 12;
+
+        float okW = Math.max(46, ok.preferredWidth());
+        float cancelW = cancel.preferredWidth();
+        ok.bounds(x + PANEL_W - PAD - okW, cy, okW, Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
+        cancel.bounds(x + PANEL_W - PAD - okW - 4 - cancelW, cy, cancelW, Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
+    }
+
+    private static void label(GuiGraphicsExtractor ctx, String text, float x, float y) {
+        UiText.draw(ctx, text, UiText.Style.LABEL, x, y, Theme.TEXT_2);
+    }
+
+    @Override
+    public boolean isPauseScreen() {
+        return false;
     }
 }

@@ -1,29 +1,39 @@
 package com.pureblue.woad.gui;
 
 import com.pureblue.woad.config.ConfigStore;
-import com.pureblue.woad.core.Woad;
 import com.pureblue.woad.features.InventoryButtonsFeature;
 import com.pureblue.woad.features.InventoryButtonsFeature.CmdButton;
-import net.minecraft.client.input.MouseButtonEvent;
-import net.minecraft.client.Minecraft;
+import com.pureblue.woad.ui.Anim;
+import com.pureblue.woad.ui.Draw;
+import com.pureblue.woad.ui.Theme;
+import com.pureblue.woad.ui.UiPanel;
+import com.pureblue.woad.ui.UiScreen;
+import com.pureblue.woad.ui.UiText;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
- * Placement editor for the inventory command buttons. Shows the inventory layout (slots are gray
- * and off-limits) with the placeable grid around and between them. Left-click a free cell to add a
+ * Placement editor for the inventory command buttons. Shows the inventory layout (its slots are
+ * off-limits) with the placeable grid around and between them. Left-click a free cell to add a
  * button, left-click a button to remove it, right-click a button to set its command.
+ *
+ * <p>Placed buttons are drawn exactly as they will appear in the real inventory, in the style the
+ * player chose — this screen previews placement, not a redesign of the buttons themselves.
  */
-public class InventoryButtonsScreen extends Screen {
+public class InventoryButtonsScreen extends UiScreen {
 
     private static final int BG_W = 176;
     private static final int BG_H = 166;
-    private static final int SLOT_COLOR = 0xFF3A3A44;
-    private static final int SLOT_BORDER = 0xFF14141A;
 
     private final Screen parent;
     private final InventoryButtonsFeature feature;
+    private final Map<Integer, Anim.Toggle> cellHover = new HashMap<>();
 
     public InventoryButtonsScreen(Screen parent, InventoryButtonsFeature feature) {
         super(Component.literal("Inventory Buttons"));
@@ -36,50 +46,69 @@ public class InventoryButtonsScreen extends Screen {
     }
 
     private int gy() {
-        return (this.height - BG_H) / 2;
+        return (this.height - BG_H) / 2 + 8;
+    }
+
+    private Anim.Toggle hoverOf(int col, int row) {
+        return cellHover.computeIfAbsent(col * 1000 + row, k -> new Anim.Toggle(Theme.MS_HOVER, Anim.Ease.OUT_CUBIC));
     }
 
     @Override
-    public void extractRenderState(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
-        super.extractRenderState(ctx, mouseX, mouseY, delta);
-        ctx.fill(0, 0, this.width, this.height, 0x90000000);
-
-        String hint = "Left-click: add / remove   •   Right-click a button: edit (command / item / label)   •   Esc: save";
-        ctx.text(this.font, hint,
-            this.width / 2 - this.font.width(hint) / 2, 16, 0xFFCCCCCC, true);
-
+    protected void renderContent(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
         int gx = gx();
         int gy = gy();
 
-        // Inventory background representation + slots (forbidden zones).
-        ctx.fill(gx - 4, gy - 4, gx + BG_W + 4, gy + BG_H + 4, 0xF01A1A1F);
-        for (int[] s : com.pureblue.woad.gui.InventoryGrid.slots()) {
-            int sx = gx + s[0];
-            int sy = gy + s[1];
-            ctx.fill(sx, sy, sx + 16, sy + 16, SLOT_COLOR);
-            border(ctx, sx, sy, 16, 16, SLOT_BORDER);
+        // Instructions, in a pill at the top.
+        String hint = "Left-click: add or remove  ·  Right-click a button: edit  ·  Esc: save";
+        float hintW = UiText.width(hint, UiText.Style.LABEL) + 20;
+        float hx = (this.width - hintW) / 2f;
+        float hy = Math.max(6, InventoryGrid.cellY(gy, InventoryGrid.ROW_MIN) - 34);
+        Draw.roundRect(ctx, hx, hy, hintW, 18, 9f, Theme.TOOLTIP_BG);
+        Draw.outline(ctx, hx, hy, hintW, 18, 9f, 1f, Theme.LINE_STRONG);
+        UiText.draw(ctx, hint, UiText.Style.LABEL, hx + 10, UiText.centerY(UiText.Style.LABEL, hy, 18), Theme.TEXT);
+
+        // The whole placeable area on a glass panel, the inventory itself as a recessed card.
+        float areaX = InventoryGrid.cellX(gx, InventoryGrid.COL_MIN) - 7;
+        float areaY = InventoryGrid.cellY(gy, InventoryGrid.ROW_MIN) - 7;
+        float areaW = InventoryGrid.cellX(gx, InventoryGrid.COL_MAX) + InventoryGrid.BTN + 7 - areaX;
+        float areaH = InventoryGrid.cellY(gy, InventoryGrid.ROW_MAX) + InventoryGrid.BTN + 7 - areaY;
+        UiPanel.panel(ctx, areaX, areaY, areaW, areaH);
+        Draw.roundRect(ctx, gx - 3, gy - 3, BG_W + 6, BG_H + 6, Theme.RADIUS_CARD, Draw.withAlpha(Theme.INSET, 0.85f));
+        Draw.outline(ctx, gx - 3, gy - 3, BG_W + 6, BG_H + 6, Theme.RADIUS_CARD, 1f, Theme.LINE_STRONG);
+        for (int[] s : InventoryGrid.slots()) {
+            // The inventory's own slots: shown for orientation, visibly unavailable — flat and
+            // without an edge, unlike the outlined cells a button can go in.
+            float sx = gx + s[0];
+            float sy = gy + s[1];
+            Draw.roundRect(ctx, sx, sy, 16, 16, Theme.RADIUS_SLOT, 0x8C070C18);
         }
 
-        // Grid: placeable outlines + placed buttons.
-        String tooltip = null;
+        // The grid: free cells, and the buttons already placed.
         for (int row = InventoryGrid.ROW_MIN; row <= InventoryGrid.ROW_MAX; row++) {
             for (int col = InventoryGrid.COL_MIN; col <= InventoryGrid.COL_MAX; col++) {
                 int cx = InventoryGrid.cellX(gx, col);
                 int cy = InventoryGrid.cellY(gy, row);
-                boolean hover = mouseX >= cx && mouseX < cx + 16 && mouseY >= cy && mouseY < cy + 16;
+                boolean over = mouseX >= cx && mouseX < cx + 16 && mouseY >= cy && mouseY < cy + 16;
                 CmdButton b = feature.buttonAt(col, row);
 
                 if (b != null) {
-                    InvButtonRenderer.draw(ctx, this.font, cx, cy, hover,
+                    float h = hoverOf(col, row).update(over);
+                    if (h > 0.01f) Draw.shadow(ctx, cx, cy, 16, 16, Theme.RADIUS_SLOT, 4f, 0f, Draw.withAlpha(Theme.GLOW, h));
+                    InvButtonRenderer.draw(ctx, this.font, cx, cy, over,
                         feature.getStyle(), feature.getBorderColor(), b);
-                    if (hover) tooltip = !b.command.isBlank() ? b.command : "Empty — right-click to edit";
+                    if (over) {
+                        tooltip.offer("cell" + col + ":" + row, List.of(
+                                !b.command.isBlank() ? "/" + b.command.replaceFirst("^/", "") : "Empty button",
+                                "Left-click to remove, right-click to edit."));
+                    }
                 } else if (!InventoryGrid.isSlotCell(col, row)) {
-                    border(ctx, cx, cy, 16, 16, hover ? 0x66FFFFFF : 0x1AFFFFFF);
+                    float h = hoverOf(col, row).update(over);
+                    Draw.roundRect(ctx, cx, cy, 16, 16, Theme.RADIUS_SLOT, Draw.withAlpha(Theme.FILL, 0.18f * h));
+                    Draw.outline(ctx, cx, cy, 16, 16, Theme.RADIUS_SLOT, 1f,
+                            Draw.mix(Draw.withAlpha(Theme.LINE_STRONG, 0.5f), Theme.ACCENT, h));
+                    if (h > 0.01f) Draw.plus(ctx, cx + 8, cy + 8, 6f, Draw.withAlpha(Theme.CYAN, h));
                 }
             }
-        }
-        if (tooltip != null) {
-            ctx.setTooltipForNextFrame(Minecraft.getInstance().font, Component.literal(tooltip), mouseX, mouseY);
         }
     }
 
@@ -121,12 +150,5 @@ public class InventoryButtonsScreen extends Screen {
     @Override
     public boolean isPauseScreen() {
         return false;
-    }
-
-    private static void border(GuiGraphicsExtractor ctx, int x, int y, int w, int h, int color) {
-        ctx.fill(x, y, x + w, y + 1, color);
-        ctx.fill(x, y + h - 1, x + w, y + h, color);
-        ctx.fill(x, y, x + 1, y + h, color);
-        ctx.fill(x + w - 1, y, x + w, y + h, color);
     }
 }

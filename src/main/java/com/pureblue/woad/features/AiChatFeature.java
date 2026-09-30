@@ -12,7 +12,8 @@ import com.pureblue.woad.core.setting.BooleanSetting;
 import com.pureblue.woad.core.setting.IntSetting;
 import com.pureblue.woad.core.setting.ModeSetting;
 import com.pureblue.woad.core.setting.StringSetting;
-import com.pureblue.woad.gui.SmallButton;
+import com.pureblue.woad.ui.Theme;
+import com.pureblue.woad.ui.UiButton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -567,41 +568,34 @@ public class AiChatFeature extends Feature {
 
     // ---- Prompt controls in the menu --------------------------------------------------------
 
-    private final int[] editRect = new int[4];
-    private final int[] resetRect = new int[4];
+    private final UiButton editPromptButton = new UiButton("Edit prompt", UiButton.Variant.SECONDARY, () -> {
+        openPrompt();
+        sendModMessage(Component.literal("Prompt file opened. Save it, the next question uses it.")
+                .withStyle(ChatFormatting.GRAY));
+    });
+    private final UiButton resetPromptButton = new UiButton("Reset", UiButton.Variant.GHOST, () -> {
+        resetPrompt();
+        sendModMessage(Component.literal("Prompt reset to the built-in one.").withStyle(ChatFormatting.GRAY));
+    });
 
     @Override
     public void renderExtra(net.minecraft.client.gui.GuiGraphicsExtractor ctx,
                             net.minecraft.client.gui.screens.Screen parent,
                             int left, int y, int right, int mouseX, int mouseY) {
-        int gap = 4;
-        int resetWidth = 52;
-        int editWidth = Math.max(60, right - left - resetWidth - gap);
-        SmallButton.draw(ctx, editRect, left, y, editWidth, "Edit prompt", mouseX, mouseY);
-        SmallButton.draw(ctx, resetRect, left + editWidth + gap, y, resetWidth, "Reset", mouseX, mouseY);
+        editPromptButton.bounds(left, y, editPromptButton.preferredWidth(), Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
+        resetPromptButton.bounds(left + editPromptButton.width() + 4, y, resetPromptButton.preferredWidth(),
+                Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
     }
 
     @Override
     public int extraHeight() {
-        return SmallButton.HEIGHT + 4;
+        return Theme.BUTTON_H_SMALL;
     }
 
     @Override
     public boolean extraMouseClicked(net.minecraft.client.gui.screens.Screen parent,
                                      double mx, double my, int button) {
-        if (button != 0) return false;
-        if (SmallButton.hit(editRect, mx, my)) {
-            openPrompt();
-            sendModMessage(Component.literal("Prompt file opened. Save it, the next question uses it.")
-                    .withStyle(ChatFormatting.GRAY));
-            return true;
-        }
-        if (SmallButton.hit(resetRect, mx, my)) {
-            resetPrompt();
-            sendModMessage(Component.literal("Prompt reset to the built-in one.").withStyle(ChatFormatting.GRAY));
-            return true;
-        }
-        return false;
+        return editPromptButton.mouseClicked(mx, my, button) || resetPromptButton.mouseClicked(mx, my, button);
     }
 
     // ---- Prompt ----------------------------------------------------------------------------

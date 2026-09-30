@@ -2,8 +2,10 @@ package com.pureblue.woad.features;
 
 import com.google.gson.JsonObject;
 import com.pureblue.woad.core.Feature;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
+import com.pureblue.woad.ui.Draw;
+import com.pureblue.woad.ui.Theme;
+import com.pureblue.woad.ui.UiPanel;
+import com.pureblue.woad.ui.UiText;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import org.joml.Matrix3x2fStack;
 
@@ -17,8 +19,8 @@ import java.util.regex.Pattern;
  * prefixed with "☺" and containing "&lt;color&gt; Jerry" (per the Hypixel wiki), so we trigger on
  * that combination rather than a single fixed phrase — and exclude "Jerry Box" drops.
  *
- * <p>The HUD always shows "Jerry: " (gold) followed by the remaining time (white), or "Ready"
- * (green) once the cooldown is over. Its position and scale are edited with {@code /woad hud}.
+ * <p>The HUD is a small dark pill: a status dot, "Jerry:" and the remaining time, or "Ready" (green)
+ * once the cooldown is over. Its position and scale are edited with {@code /woad hud}.
  */
 public class JerryTimerFeature extends Feature {
 
@@ -28,10 +30,13 @@ public class JerryTimerFeature extends Feature {
     private static final Pattern JERRY_SPAWN =
             Pattern.compile("☺.*(?:Green|Blue|Purple|Golden) Jerry(?! Box)");
 
-    private static final String LABEL = "Jerry: ";
-    private static final int LABEL_COLOR = 0xFFFFAA00; // gold/yellow (Jerry)
-    private static final int TIME_COLOR = 0xFFFFFFFF;  // white
-    private static final int READY_COLOR = 0xFF55FF55; // green
+    private static final String LABEL = "Jerry:";
+
+    // Pill geometry, before the player's HUD scale is applied (GUI pixels).
+    private static final float PILL_H = 14f;
+    private static final float TEXT_X = 13f;
+    private static final float VALUE_GAP = 3f;
+    private static final float PAD_RIGHT = 7f;
 
     /** 0 means no countdown is running (idle → shows "Ready"). */
     private long endMillis = 0L;
@@ -42,9 +47,7 @@ public class JerryTimerFeature extends Feature {
     private float hudScale = 1.5f;
 
     public JerryTimerFeature() {
-        super("jerry_timer", "Jerry Timer",
-                "Shows a 6-minute Hidden Jerry cooldown on a movable HUD (edit with /woad hud). "
-                        + "Shows \"Ready\" when it is up.",
+        super("jerry_timer", "Jerry Timer", "",
                 true);
     }
 
@@ -72,29 +75,46 @@ public class JerryTimerFeature extends Feature {
         hudScale = Math.max(0.5f, Math.min(5.0f, scale));
     }
 
-    /** Screen-space bounds {x1, y1, x2, y2} of the HUD text, for the editor's drag hit-test. */
+    /** Screen-space bounds {x1, y1, x2, y2} of the HUD, for the editor's drag hit-test. */
     public int[] getHudBounds() {
-        Font tr = Minecraft.getInstance().font;
-        int w = tr.width(LABEL) + tr.width(currentValue());
-        int h = tr.lineHeight;
+        // Measured in the rasterisation the HUD is drawn with, so the frame hugs it exactly.
+        float previous = Draw.pushScale(hudScale);
+        float w = pillWidth(currentValue());
+        Draw.popScale(previous);
         return new int[]{hudX, hudY,
-                hudX + Math.round(w * hudScale), hudY + Math.round(h * hudScale)};
+                hudX + Math.round(w * hudScale), hudY + Math.round(PILL_H * hudScale)};
+    }
+
+    /** Unscaled width of the pill for a given value; drawing and hit-testing both use it. */
+    private static float pillWidth(String value) {
+        return TEXT_X + UiText.width(LABEL, UiText.Style.BODY) + VALUE_GAP
+                + UiText.width(value, UiText.Style.LABEL) + PAD_RIGHT;
     }
 
     // ---- Rendering ------------------------------------------------------------------------
 
-    /** Draws the HUD: "Jerry: " in gold + the time in white, or "Ready" in green. No background. */
+    /** Draws the HUD pill: a status dot, "Jerry:", and the time — or "Ready" in green. */
     public void renderHud(GuiGraphicsExtractor context) {
-        Font tr = Minecraft.getInstance().font;
         String value = currentValue();
-        int valueColor = value.equals("Ready") ? READY_COLOR : TIME_COLOR;
+        boolean ready = value.equals("Ready");
 
         Matrix3x2fStack matrices = context.pose();
         matrices.pushMatrix();
         matrices.translate((float) hudX, (float) hudY);
         matrices.scale(hudScale, hudScale);
-        context.text(tr, LABEL, 0, 0, LABEL_COLOR, true);
-        context.text(tr, value, tr.width(LABEL), 0, valueColor, true);
+        // The HUD is enlarged by the player's own scale: rasterise its text for that size, or the
+        // glyphs are stretched and look pixelated.
+        float previousScale = Draw.pushScale(hudScale);
+        float w = pillWidth(value);
+        float r = PILL_H / 2f;
+        Draw.roundRect(context, 0, 0, w, PILL_H, r, Theme.HUD_BG);
+        Draw.outline(context, 0, 0, w, PILL_H, r, 1f, ready ? Draw.withAlpha(Theme.OK, 0.45f) : Theme.LINE_STRONG);
+        UiPanel.dot(context, 7f, PILL_H / 2f, true, ready ? Theme.OK : Theme.CYAN);
+        UiText.draw(context, LABEL, UiText.Style.BODY, TEXT_X, UiText.centerY(UiText.Style.BODY, 0, PILL_H), Theme.TEXT_2);
+        float valueX = TEXT_X + UiText.width(LABEL, UiText.Style.BODY) + VALUE_GAP;
+        UiText.draw(context, value, UiText.Style.LABEL, valueX, UiText.centerY(UiText.Style.LABEL, 0, PILL_H),
+                ready ? Theme.OK : Theme.TEXT);
+        Draw.popScale(previousScale);
         matrices.popMatrix();
     }
 

@@ -25,8 +25,7 @@ public class LoadoutKeybindsFeature extends Feature {
     private final KeybindSetting[] binds = new KeybindSetting[SLOTS.length];
 
     public LoadoutKeybindsFeature() {
-        super("loadout_keybinds", "Loadout Keybinds",
-                "Press a bound key in the Loadouts menu to select that loadout.",
+        super("loadout_keybinds", "Loadout Keybinds", "",
                 true);
         for (int i = 0; i < SLOTS.length; i++) {
             binds[i] = addSetting(new KeybindSetting("Loadout " + (i + 1), ""));

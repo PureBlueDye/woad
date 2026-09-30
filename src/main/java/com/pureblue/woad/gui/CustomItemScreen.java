@@ -1,15 +1,22 @@
 package com.pureblue.woad.gui;
 
-import com.pureblue.woad.core.Woad;
 import com.pureblue.woad.customitem.CustomItem;
 import com.pureblue.woad.customitem.CustomItemApplier;
 import com.pureblue.woad.customitem.CustomItemStore;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.input.MouseButtonEvent;
-import net.minecraft.core.registries.BuiltInRegistries;
+import com.pureblue.woad.ui.Anim;
+import com.pureblue.woad.ui.Draw;
+import com.pureblue.woad.ui.Theme;
+import com.pureblue.woad.ui.UiButton;
+import com.pureblue.woad.ui.UiPanel;
+import com.pureblue.woad.ui.UiScreen;
+import com.pureblue.woad.ui.UiText;
+import com.pureblue.woad.ui.UiTextField;
+import com.pureblue.woad.ui.UiToggle;
+import com.pureblue.woad.ui.UiValueButton;
+import com.pureblue.woad.ui.UiWidget;
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.world.item.Item;
@@ -24,50 +31,40 @@ import java.util.Locale;
  * Editor for the look of the item in hand.
  *
  * <p>Everything is typed in place — no sub-windows — and the preview updates as the fields change,
- * so the panel shows the result rather than describing it. The dye row only appears once the chosen
- * id is leather armour, which keeps the screen down to what actually applies.
+ * so the panel shows the result rather than describing it. The dye rows only appear once the
+ * chosen id is leather armour, which keeps the screen down to what actually applies.
  */
-public class CustomItemScreen extends Screen {
+public class CustomItemScreen extends UiScreen {
 
-    private static final int OVERLAY   = 0xC8000000;
-    private static final int BORDER    = 0xFF34343C;
-    private static final int PANEL     = 0xFF1B1B20;
-    private static final int WELL      = 0xFF141417;
-    private static final int FIELD     = 0xFF26262C;
-    private static final int FIELD_HOT = 0xFF32323C;
-    private static final int TEXT      = 0xFFE8E8EC;
-    private static final int TEXT_DIM  = 0xFF8B8B95;
-    private static final int ACCENT    = Woad.ACCENT;
-
-    private static final int PANEL_W   = 300;
-    private static final int PANEL_H   = 168;
-    private static final int PAD       = 12;
-    private static final int PREVIEW   = 76;
-    private static final int LABEL_W   = 34;
-    private static final int BADGE_W   = 12;
-    private static final int ROW_H     = 18;
-    private static final int GAP       = 4;
+    private static final int PANEL_W = 300;
+    private static final int PAD = 12;
+    private static final int PREVIEW = 76;
+    private static final int LABEL_W = 30;
+    private static final int BADGE = 16;
+    private static final int ROW_H = 18;
+    private static final int GAP = 5;
+    /** Room for five rows even when only three show, so the panel does not jump in size. */
+    private static final int ROWS_H = 5 * ROW_H + 4 * GAP;
 
     /**
-     * The help panel is drawn by hand rather than as a vanilla tooltip.
+     * The code reference keeps a light background, unlike the rest of the interface.
      *
-     * <p>Vanilla tooltips sit on a near-black background, where {@code &0} and {@code &1} are all
-     * but invisible — useless for a colour reference. No flat background fixes this on its own: the
-     * palette spans every luminance, so the best possible worst-case contrast is only 1.3.
-     *
-     * <p>What does work is the game's own answer: a light panel plus the text shadow. Dark codes
-     * stand out against the panel, and light ones get a dark outline from their shadow, which
-     * measures between 6 and 9 times the contrast of the glyph itself.
+     * <p>A dark background leaves {@code &0} and {@code &1} all but invisible, and no flat colour
+     * fixes this on its own: the palette spans every luminance, so the best possible worst-case
+     * contrast is only 1.3. What works is the game's own answer: a light panel plus the text
+     * shadow. Dark codes stand out against the panel, and light ones get a dark outline from their
+     * shadow, 6 to 9 times the contrast of the glyph itself.
      */
-    private static final int HELP_BG     = 0xFFC6C6C6;
-    private static final int HELP_BORDER = 0xFF373737;
-    private static final int HELP_TEXT   = 0xFF3F3F46;
+    private static final int HELP_BG = 0xFFC4CCDA;
+    private static final int HELP_EDGE = 0xFF2A3752;
+    private static final int HELP_TEXT = 0xFF33415A;
 
     /**
-     * A help line, split so each half can be drawn differently: the name is flat text without a
-     * shadow, the codes carry one because it is what keeps light colours readable.
+     * A help line, split so each half can be drawn differently. Names are flat text. Only the
+     * colour codes carry the drop shadow — it is what keeps the light colours readable — since on
+     * the dark format codes a shadow just smudges the glyph.
      */
-    private record HelpLine(Component name, Component codes) {}
+    private record HelpLine(Component name, Component codes, boolean shadow) {}
 
     private static final List<HelpLine> HELP = buildHelp();
 
@@ -77,9 +74,10 @@ public class CustomItemScreen extends Screen {
         // All sixteen colours on one line, each code printed in the colour it produces.
         MutableComponent colours = Component.empty();
         for (char code : "0123456789abcdef".toCharArray()) {
+            if (code != '0') colours.append(Component.literal(" "));
             colours.append(Component.literal("&" + code).withStyle(ChatFormatting.getByCode(code)));
         }
-        lines.add(new HelpLine(Component.literal("Colour"), colours));
+        lines.add(new HelpLine(Component.literal("Colour"), colours, true));
 
         // One line per kind of formatting, the name written in the style it produces.
         lines.add(styled("Bold", 'l'));
@@ -88,8 +86,8 @@ public class CustomItemScreen extends Screen {
         lines.add(styled("Strike", 'm'));
         // "Magic" stays plain: applying it scrambles the glyphs, which reads as a rendering bug
         // rather than as an example — and "Reset" has no look of its own to show.
-        lines.add(new HelpLine(Component.literal("Magic"), Component.literal("&k")));
-        lines.add(new HelpLine(Component.literal("Reset"), Component.literal("&r")));
+        lines.add(new HelpLine(Component.literal("Magic"), Component.literal("&k"), false));
+        lines.add(new HelpLine(Component.literal("Reset"), Component.literal("&r"), false));
         return lines;
     }
 
@@ -97,24 +95,22 @@ public class CustomItemScreen extends Screen {
     private static HelpLine styled(String name, char code) {
         ChatFormatting format = ChatFormatting.getByCode(code);
         return new HelpLine(Component.literal(name).withStyle(format),
-                Component.literal("&" + code).withStyle(format));
+                Component.literal("&" + code).withStyle(format), false);
     }
 
     private final ItemStack original;
     private final String key;
     private CustomItem draft;
 
-    private EditBox nameField;
-    private EditBox idField;
-    private EditBox dyeField;
-
-    private boolean helpHovered = false;
-
-    private final int[] glintBox = new int[4];
-    private final int[] rgbBox = new int[4];
-    private final int[] saveBox = new int[4];
-    private final int[] resetBox = new int[4];
-    private final int[] closeBox = new int[4];
+    private final UiTextField nameField;
+    private final UiTextField idField;
+    private final UiTextField dyeField;
+    private final UiValueButton glint;
+    private final UiToggle rgb;
+    private final HelpBadge help = new HelpBadge();
+    private final UiButton reset;
+    private final UiButton close;
+    private final UiButton save;
 
     public CustomItemScreen(ItemStack held) {
         super(Component.literal("Custom item"));
@@ -122,47 +118,50 @@ public class CustomItemScreen extends Screen {
         this.key = CustomItemStore.keyOf(held);
         CustomItem saved = CustomItemStore.get(key);
         this.draft = saved == null ? new CustomItem() : saved.copy();
-    }
 
-    /** Left edge of the label column: right of the preview, never over it. */
-    private int labelLeft() {
-        return (this.width - PANEL_W) / 2 + PAD + PREVIEW + PAD;
-    }
+        nameField = add(new UiTextField(draft.name, 64));
+        nameField.box().setResponder(value -> draft.name = value);
+        nameField.box().addFormatter((visible, offset) ->
+                LegacyColors.render(visible, LegacyColors.styleAt(nameField.value(), offset)));
 
-    /** Left edge of the value column. */
-    private int fieldLeft() {
-        return labelLeft() + LABEL_W;
-    }
+        idField = add(new UiTextField(draft.vanillaItem, 48));
+        idField.box().setResponder(value -> draft.vanillaItem = value.trim().toLowerCase(Locale.ROOT));
 
-    private int fieldRight() {
-        return (this.width - PANEL_W) / 2 + PANEL_W - PAD;
+        dyeField = add(new UiTextField(draft.leatherColor == CustomItem.NO_COLOR ? "" : hex(draft.leatherColor), 7));
+        dyeField.box().setResponder(this::readDye);
+
+        glint = add(new UiValueButton(UiValueButton.Kind.CYCLE,
+                () -> draft.glint.name().toLowerCase(Locale.ROOT), () -> {
+                    CustomItem.Glint[] values = CustomItem.Glint.values();
+                    draft.glint = values[(draft.glint.ordinal() + 1) % values.length];
+                }));
+        rgb = add(new UiToggle(() -> draft.rgb, on -> {
+            draft.rgb = on;
+            if (on) {
+                draft.leatherColor = CustomItem.NO_COLOR;
+                dyeField.value("");
+            }
+        }));
+
+        reset = add(new UiButton("Reset", UiButton.Variant.GHOST, () -> {
+            draft = new CustomItem();
+            CustomItemStore.remove(key);
+            nameField.value("");
+            idField.value("");
+            dyeField.value("");
+        }));
+        close = add(new UiButton("Close", UiButton.Variant.SECONDARY, this::onClose));
+        save = add(new UiButton("Save", UiButton.Variant.PRIMARY, () -> {
+            CustomItemStore.put(key, draft);
+            onClose();
+        }));
     }
 
     @Override
     protected void init() {
-        int left = fieldLeft();
-        int top = (this.height - PANEL_H) / 2 + PAD;
-        int width = fieldRight() - left;
-
-        // The name field gives up a sliver for the "!" help badge beside it.
-        nameField = field(left, top, width - BADGE_W - 2, draft.name, 64, value -> draft.name = value);
-        nameField.addFormatter((visible, offset) ->
-                LegacyColors.render(visible, LegacyColors.styleAt(nameField.getValue(), offset)));
-
-        idField = field(left, top + (ROW_H + GAP), width, draft.vanillaItem, 48,
-                value -> draft.vanillaItem = value.trim().toLowerCase(Locale.ROOT));
-        dyeField = field(left, top + (ROW_H + GAP) * 3, width,
-                draft.leatherColor == CustomItem.NO_COLOR ? "" : hex(draft.leatherColor), 7,
-                this::readDye);
-    }
-
-    private EditBox field(int x, int y, int width, String value, int maxLength,
-                          java.util.function.Consumer<String> onChange) {
-        EditBox box = new EditBox(this.font, x, y + 1, width, ROW_H - 2, Component.empty());
-        box.setMaxLength(maxLength);
-        box.setValue(value);
-        box.setResponder(onChange);
-        return this.addRenderableWidget(box);
+        addWidget(nameField.box());
+        addWidget(idField.box());
+        addWidget(dyeField.box());
     }
 
     /** A blank or unparsable dye box simply means "no dye", rather than an error. */
@@ -183,51 +182,58 @@ public class CustomItemScreen extends Screen {
     // ---- Drawing ---------------------------------------------------------------------------
 
     @Override
-    public void extractRenderState(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
-        ctx.fill(0, 0, this.width, this.height, OVERLAY);
-
-        int x = (this.width - PANEL_W) / 2;
-        int y = (this.height - PANEL_H) / 2;
-        ctx.fill(x - 1, y - 1, x + PANEL_W + 1, y + PANEL_H + 1, BORDER);
-        ctx.fill(x, y, x + PANEL_W, y + PANEL_H, PANEL);
+    protected void renderContent(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
+        float h = PAD + ROWS_H + 12 + Theme.BUTTON_H_SMALL + PAD;
+        float x = Math.round((this.width - PANEL_W) / 2f);
+        float y = Math.round((this.height - h) / 2f);
+        UiPanel.panel(ctx, x, y, PANEL_W, h);
 
         drawPreview(ctx, x + PAD, y + PAD);
 
-        int left = fieldLeft();
-        int right = fieldRight();
-        int row = y + PAD;
+        float labelX = x + PAD + PREVIEW + PAD;
+        float left = labelX + LABEL_W;
+        float right = x + PANEL_W - PAD;
+        float row = y + PAD;
+        float step = ROW_H + GAP;
 
-        label(ctx, left, row, "Name");
-        drawHelpBadge(ctx, right - BADGE_W, row, mouseX, mouseY);
-        label(ctx, left, row + (ROW_H + GAP), "Id");
+        label(ctx, "Name", labelX, row);
+        nameField.bounds(left, row, right - left - BADGE - 4, ROW_H).render(ctx, mouseX, mouseY);
+        help.bounds(right - BADGE, row + (ROW_H - BADGE) / 2f, BADGE, BADGE).render(ctx, mouseX, mouseY);
+
+        label(ctx, "Id", labelX, row + step);
+        idField.bounds(left, row + step, right - left, ROW_H).render(ctx, mouseX, mouseY);
+
+        label(ctx, "Glint", labelX, row + step * 2);
+        glint.bounds(left, row + step * 2, right - left, ROW_H).render(ctx, mouseX, mouseY);
 
         boolean leather = leatherChosen();
-        toggle(ctx, glintBox, left, row + (ROW_H + GAP) * 2, right, "Glint",
-                draft.glint.name().toLowerCase(Locale.ROOT), mouseX, mouseY);
-
-        dyeField.visible = leather;
-        dyeField.active = leather;
+        dyeField.box().visible = leather;
+        dyeField.box().active = leather;
+        dyeField.visible(leather);
+        rgb.visible(leather);
         if (leather) {
-            label(ctx, left, row + (ROW_H + GAP) * 3, "Dye");
-            toggle(ctx, rgbBox, left, row + (ROW_H + GAP) * 4, right, "RGB",
-                    draft.rgb ? "on" : "off", mouseX, mouseY);
-        } else {
-            java.util.Arrays.fill(rgbBox, 0);
+            label(ctx, "Dye", labelX, row + step * 3);
+            float swatch = ROW_H;
+            drawDyeSwatch(ctx, left, row + step * 3, swatch);
+            dyeField.bounds(left + swatch + 4, row + step * 3, right - left - swatch - 4, ROW_H).render(ctx, mouseX, mouseY);
+            label(ctx, "RGB", labelX, row + step * 4);
+            rgb.at(left, row + step * 4 + (ROW_H - Theme.SWITCH_H) / 2f).render(ctx, mouseX, mouseY);
         }
 
-        drawFooter(ctx, x, y, mouseX, mouseY);
-        // Widgets before the help so the text fields sit above the panel, help above everything.
-        super.extractRenderState(ctx, mouseX, mouseY, delta);
-        if (helpHovered) drawHelpPanel(ctx, mouseX, mouseY);
+        // Footer: reset on the left, close and save on the right.
+        float fy = y + h - PAD - Theme.BUTTON_H_SMALL;
+        reset.bounds(x + PAD, fy, reset.preferredWidth(), Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
+        float saveW = Math.max(50, save.preferredWidth());
+        save.bounds(right - saveW, fy, saveW, Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
+        float closeW = close.preferredWidth();
+        close.bounds(right - saveW - 4 - closeW, fy, closeW, Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
+
+        if (help.contains(mouseX, mouseY)) drawHelpPanel(ctx, mouseX, mouseY);
     }
 
-    private void drawPreview(GuiGraphicsExtractor ctx, int left, int top) {
-        ctx.fill(left, top, left + PREVIEW, top + PREVIEW, WELL);
-        ctx.fill(left, top, left + PREVIEW, top + 1, BORDER);
-        ctx.fill(left, top + PREVIEW - 1, left + PREVIEW, top + PREVIEW, BORDER);
-        ctx.fill(left, top, left + 1, top + PREVIEW, BORDER);
-        ctx.fill(left + PREVIEW - 1, top, left + PREVIEW, top + PREVIEW, BORDER);
-
+    private void drawPreview(GuiGraphicsExtractor ctx, float left, float top) {
+        UiPanel.inset(ctx, left, top, PREVIEW, PREVIEW, Theme.RADIUS_CARD);
+        Draw.circle(ctx, left + PREVIEW / 2f, top + PREVIEW / 2f, 26f, Theme.GLOW_SOFT);
         Matrix3x2fStack pose = ctx.pose();
         pose.pushMatrix();
         pose.translate(left + PREVIEW / 2f - 24, top + PREVIEW / 2f - 24);
@@ -236,116 +242,57 @@ public class CustomItemScreen extends Screen {
         pose.popMatrix();
     }
 
-    /** The "!" beside the name field; hovering it lists the codes without cluttering the panel. */
-    private void drawHelpBadge(GuiGraphicsExtractor ctx, int left, int y, int mouseX, int mouseY) {
-        helpHovered = mouseX >= left && mouseX <= left + BADGE_W
-                && mouseY >= y && mouseY <= y + ROW_H;
-        ctx.fill(left, y, left + BADGE_W, y + ROW_H, helpHovered ? FIELD_HOT : FIELD);
-        ctx.centeredText(this.font, Component.literal("!"), left + BADGE_W / 2, y + 5,
-                helpHovered ? ACCENT : TEXT_DIM);
+    private void drawDyeSwatch(GuiGraphicsExtractor ctx, float x, float y, float size) {
+        if (draft.rgb) {
+            float t = (float) (Anim.nowMs() % 6000 / 6000.0);
+            Draw.roundRectH(ctx, x, y, size, size, Theme.RADIUS_CONTROL,
+                    0xFF000000 | java.awt.Color.HSBtoRGB(t, 1f, 1f), 0xFF000000 | java.awt.Color.HSBtoRGB(t + 0.33f, 1f, 1f));
+        } else if (draft.leatherColor != CustomItem.NO_COLOR) {
+            Draw.roundRect(ctx, x, y, size, size, Theme.RADIUS_CONTROL, 0xFF000000 | draft.leatherColor);
+        } else {
+            Draw.roundRect(ctx, x, y, size, size, Theme.RADIUS_CONTROL, Theme.INSET);
+            Draw.line(ctx, x + 4, y + size - 4, x + size - 4, y + 4, 1.2f, Theme.TEXT_3);
+        }
+        Draw.outline(ctx, x, y, size, size, Theme.RADIUS_CONTROL, 1f, 0x2EFFFFFF);
     }
 
     /** The code reference, on its own light background so every colour stays readable. */
     private void drawHelpPanel(GuiGraphicsExtractor ctx, int mouseX, int mouseY) {
-        int pad = 6;
-        int lineHeight = this.font.lineHeight + 2;
+        UiText.Style style = UiText.Style.LABEL;
+        int pad = 8;
+        int lineHeight = 11;
 
         // The codes line up in a column of their own, measured from the widest name. A padded
         // string would not work: bold and italic names are wider than plain ones.
         int nameColumn = 0;
         int codeColumn = 0;
         for (HelpLine line : HELP) {
-            nameColumn = Math.max(nameColumn, this.font.width(line.name()));
-            codeColumn = Math.max(codeColumn, this.font.width(line.codes()));
+            nameColumn = Math.max(nameColumn, UiText.width(line.name(), style));
+            codeColumn = Math.max(codeColumn, UiText.width(line.codes(), style));
         }
-        int gap = 10;
-        int width = pad + nameColumn + gap + codeColumn + pad;
-        int height = HELP.size() * lineHeight + pad * 2;
+        int gap = 12;
+        float width = pad + nameColumn + gap + codeColumn + pad;
+        float height = HELP.size() * lineHeight + pad * 2 - 3;
 
         // Prefer below-right of the cursor, but never off the screen.
-        int left = Math.max(2, Math.min(mouseX + 10, this.width - width - 2));
-        int top = Math.max(2, Math.min(mouseY + 10, this.height - height - 2));
+        float left = Math.max(4, Math.min(mouseX + 10, this.width - width - 4));
+        float top = Math.max(4, Math.min(mouseY + 10, this.height - height - 4));
 
-        ctx.fill(left - 1, top - 1, left + width + 1, top + height + 1, HELP_BORDER);
-        ctx.fill(left, top, left + width, top + height, HELP_BG);
+        ctx.nextStratum();
+        Draw.roundRect(ctx, left, top, width, height, 6f, HELP_BG);
+        Draw.outline(ctx, left, top, width, height, 6f, 1f, HELP_EDGE);
 
-        int y = top + pad;
+        float y = top + pad;
         for (HelpLine line : HELP) {
-            // No shadow behind the names: a dark glyph over its own dark shadow just smudges.
-            ctx.text(this.font, line.name(), left + pad, y, HELP_TEXT, false);
-            // Shadow on the codes: it is what keeps the light colours readable on a light panel.
-            ctx.text(this.font, line.codes(), left + pad + nameColumn + gap, y, HELP_TEXT, true);
+            UiText.draw(ctx, line.name().getVisualOrderText(), style, left + pad, y, HELP_TEXT, false);
+            UiText.draw(ctx, line.codes().getVisualOrderText(), style, left + pad + nameColumn + gap, y,
+                    HELP_TEXT, line.shadow());
             y += lineHeight;
         }
     }
 
-    private void label(GuiGraphicsExtractor ctx, int left, int y, String text) {
-        ctx.text(this.font, Component.literal(text), labelLeft(), y + 5, TEXT_DIM, false);
-    }
-
-    /** A row that cycles on click rather than being typed into. */
-    private void toggle(GuiGraphicsExtractor ctx, int[] box, int left, int y, int right,
-                        String text, String value, int mouseX, int mouseY) {
-        boolean hovered = mouseX >= left && mouseX <= right && mouseY >= y && mouseY <= y + ROW_H;
-        ctx.fill(left, y, right, y + ROW_H, hovered ? FIELD_HOT : FIELD);
-        if (hovered) ctx.fill(left, y, left + 1, y + ROW_H, ACCENT);
-        label(ctx, left, y, text);
-        ctx.text(this.font, Component.literal(value), left + 6, y + 5, TEXT, false);
-
-        box[0] = left;
-        box[1] = y;
-        box[2] = right;
-        box[3] = y + ROW_H;
-    }
-
-    private void drawFooter(GuiGraphicsExtractor ctx, int x, int y, int mouseX, int mouseY) {
-        int footer = y + PANEL_H - PAD - SmallButton.HEIGHT;
-        int width = (PANEL_W - PAD * 2 - GAP * 2) / 3;
-        SmallButton.draw(ctx, saveBox, x + PAD, footer, width, "Save", mouseX, mouseY);
-        SmallButton.draw(ctx, resetBox, x + PAD + width + GAP, footer, width, "Reset", mouseX, mouseY);
-        SmallButton.draw(ctx, closeBox, x + PAD + (width + GAP) * 2, footer, width, "Close", mouseX, mouseY);
-    }
-
-    // ---- Input -----------------------------------------------------------------------------
-
-    @Override
-    public boolean mouseClicked(MouseButtonEvent click, boolean doubled) {
-        double mx = click.x();
-        double my = click.y();
-
-        if (click.button() == 0) {
-            if (inside(glintBox, mx, my)) {
-                CustomItem.Glint[] values = CustomItem.Glint.values();
-                draft.glint = values[(draft.glint.ordinal() + 1) % values.length];
-                return true;
-            }
-            if (inside(rgbBox, mx, my)) {
-                draft.rgb = !draft.rgb;
-                if (draft.rgb) {
-                    draft.leatherColor = CustomItem.NO_COLOR;
-                    dyeField.setValue("");
-                }
-                return true;
-            }
-            if (SmallButton.hit(saveBox, mx, my)) {
-                CustomItemStore.put(key, draft);
-                onClose();
-                return true;
-            }
-            if (SmallButton.hit(resetBox, mx, my)) {
-                draft = new CustomItem();
-                CustomItemStore.remove(key);
-                nameField.setValue("");
-                idField.setValue("");
-                dyeField.setValue("");
-                return true;
-            }
-            if (SmallButton.hit(closeBox, mx, my)) {
-                onClose();
-                return true;
-            }
-        }
-        return super.mouseClicked(click, doubled);
+    private static void label(GuiGraphicsExtractor ctx, String text, float x, float rowY) {
+        UiText.draw(ctx, text, UiText.Style.LABEL, x, UiText.centerY(UiText.Style.LABEL, rowY, ROW_H), Theme.TEXT_2);
     }
 
     // ---- Helpers ---------------------------------------------------------------------------
@@ -364,10 +311,6 @@ public class CustomItemScreen extends Screen {
         return BuiltInRegistries.ITEM.getKey(effective).getPath().startsWith("leather_");
     }
 
-    private static boolean inside(int[] box, double mx, double my) {
-        return box[2] > box[0] && mx >= box[0] && mx <= box[2] && my >= box[1] && my <= box[3];
-    }
-
     private static String hex(int rgb) {
         return String.format("%06X", rgb & 0xFFFFFF);
     }
@@ -375,5 +318,18 @@ public class CustomItemScreen extends Screen {
     @Override
     public boolean isPauseScreen() {
         return false;
+    }
+
+    /** The "!" beside the name field; hovering it lists the codes without cluttering the panel. */
+    private static final class HelpBadge extends UiWidget {
+        @Override
+        protected void draw(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float hv) {
+            float r = w / 2f;
+            if (hv > 0.01f) Draw.shadow(ctx, x, y, w, h, r, 4f, 0f, Draw.withAlpha(Theme.GLOW, hv));
+            Draw.roundRect(ctx, x, y, w, h, r, Draw.mix(Theme.INSET, Theme.HOVER, hv));
+            Draw.outline(ctx, x, y, w, h, r, 1f, Draw.mix(Theme.LINE_STRONG, Theme.ACCENT, hv));
+            UiText.drawCentered(ctx, "!", UiText.Style.LABEL, x + w / 2f,
+                    UiText.centerY(UiText.Style.LABEL, y, h), Draw.mix(Theme.TEXT_2, Theme.CYAN, hv));
+        }
     }
 }

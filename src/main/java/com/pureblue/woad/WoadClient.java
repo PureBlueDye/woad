@@ -10,6 +10,12 @@ import com.pureblue.woad.core.FeatureManager;
 import com.pureblue.woad.features.LoadoutKeybindsFeature;
 import com.pureblue.woad.gui.WoadScreen;
 import com.pureblue.woad.net.NetworkChoice;
+import com.pureblue.woad.ui.DevCapture;
+import com.pureblue.woad.ui.UiGalleryScreen;
+import com.pureblue.woad.ui.UiVanillaButton;
+import java.util.ArrayList;
+import java.util.List;
+import net.fabricmc.loader.api.FabricLoader;
 import com.pureblue.woad.gui.HudEditScreen;
 import com.pureblue.woad.lava.LavaColorManager;
 import net.fabricmc.api.ClientModInitializer;
@@ -45,6 +51,9 @@ public class WoadClient implements ClientModInitializer {
     private boolean pendingHudOpen = false;
     private boolean pendingBlackjackOpen = false;
     private boolean pendingCustomItem = false;
+    private boolean pendingGallery = false;
+    /** The design-system gallery opens itself once when WOAD_GALLERY is set (development only). */
+    private boolean galleryAutoOpened = false;
 
     @Override
     public void onInitializeClient() {
@@ -81,6 +90,17 @@ public class WoadClient implements ClientModInitializer {
                                     pendingHudOpen = true;
                                     return 1;
                                 }))));
+
+        // "/woad ui": every component of the design system on one screen. Development builds
+        // only — the command does not exist in a released jar.
+        if (FabricLoader.getInstance().isDevelopmentEnvironment()) {
+            ClientCommandRegistrationCallback.EVENT.register((dispatcher, access) ->
+                    dispatcher.register(ClientCommands.literal(Woad.MOD_ID)
+                            .then(ClientCommands.literal("ui").executes(ctx -> {
+                                pendingGallery = true;
+                                return 1;
+                            }))));
+        }
 
         // Draw feature HUDs (e.g. the Jerry timer) over the in-game overlay.
         // 26.x replaced HudRenderCallback with named HUD elements drawn after the vanilla ones.
@@ -145,13 +165,10 @@ public class WoadClient implements ClientModInitializer {
     /** The adapter button: shows the current choice, and cycles through the adapters on click. */
     private static Button buildAdapterButton(int screenWidth) {
         int width = 110;
-        Button button = Button.builder(adapterLabel(), b -> {
+        return new UiVanillaButton(screenWidth - width - 6, 6, width, 20, adapterLabel(), b -> {
             NetworkChoice.cycle();
             b.setMessage(adapterLabel());
-            b.setTooltip(adapterTooltip());
-        }).bounds(screenWidth - width - 6, 6, width, 20).build();
-        button.setTooltip(adapterTooltip());
-        return button;
+        }).tooltip(WoadClient::adapterTooltip);
     }
 
     /** Never the address: this button is visible on stream and in screen shares. */
@@ -160,14 +177,18 @@ public class WoadClient implements ClientModInitializer {
     }
 
     /** The address belongs here, where it only shows while the mouse rests on the button. */
-    private static Tooltip adapterTooltip() {
+    private static List<String> adapterTooltip() {
         NetworkChoice.Option current = NetworkChoice.current();
-        String detail = current.address() == null
-                ? "Automatic: whichever connection the system picks."
-                : current.fullName() + "\n" + current.address().getHostAddress();
-        return Tooltip.create(Component.literal(detail
-                + "\nClick to switch connection."
-                + "\nApplies to joining servers and pings, not to login."));
+        List<String> lines = new ArrayList<>();
+        if (current.address() == null) {
+            lines.add("Automatic: whichever connection the system picks.");
+        } else {
+            lines.add(current.fullName());
+            lines.add(current.address().getHostAddress());
+        }
+        lines.add("Click to switch connection.");
+        lines.add("Applies to joining servers and pings, not to login.");
+        return lines;
     }
 
     private void onClientTick(Minecraft client) {
@@ -187,6 +208,14 @@ public class WoadClient implements ClientModInitializer {
             } else if (pendingCustomItem) {
                 pendingCustomItem = false;
                 openCustomItemEditor(client);
+            } else if (pendingGallery) {
+                pendingGallery = false;
+                client.setScreen(new UiGalleryScreen());
+            } else if (!galleryAutoOpened && client.player != null
+                    && FabricLoader.getInstance().isDevelopmentEnvironment()
+                    && System.getenv("WOAD_GALLERY") != null) {
+                galleryAutoOpened = true;
+                client.setScreen(new UiGalleryScreen());
             }
         }
 
@@ -194,6 +223,9 @@ public class WoadClient implements ClientModInitializer {
         CustomItemApplier.tick();
 
         FeatureManager.onClientTick();
+
+        // Development only: automated screenshots of the interface (WOAD_SHOT).
+        DevCapture.tick(client);
     }
 
     /** Opens the look editor for whatever is in the main hand. */

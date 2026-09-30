@@ -11,7 +11,9 @@
     "ChatHudAccessor",
     "ConnectionBindMixin",
     "ItemRefreshMixin",
-    "FluidStateModelSetMixin"
+    "FluidStateModelSetMixin",
+    "GuiGraphicsExtractorAccessor",
+    "FontAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

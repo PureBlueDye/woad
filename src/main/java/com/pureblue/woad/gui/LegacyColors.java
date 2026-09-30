@@ -17,7 +17,7 @@ import java.util.List;
 public final class LegacyColors {
 
     /** Colour used for the code characters themselves, so they read as markup, not content. */
-    private static final int MARKUP = 0xFF5A5A66;
+    private static final int MARKUP = com.pureblue.woad.ui.Theme.TEXT_3;
 
     private LegacyColors() {}
 

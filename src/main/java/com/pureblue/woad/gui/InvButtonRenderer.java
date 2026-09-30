@@ -6,6 +6,9 @@ import com.mojang.authlib.properties.Property;
 import com.mojang.authlib.properties.PropertyMap;
 import com.pureblue.woad.features.InventoryButtonsFeature.CmdButton;
 import com.pureblue.woad.features.InventoryButtonsFeature.Style;
+import com.pureblue.woad.ui.Draw;
+import com.pureblue.woad.ui.Theme;
+import com.pureblue.woad.ui.UiText;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -34,16 +37,17 @@ public final class InvButtonRenderer {
 
     public static void draw(GuiGraphicsExtractor ctx, Font tr, int x, int y, boolean hover,
                             Style style, int borderColor, CmdButton b) {
-        // Background: vanilla button sprite, or a flat fill with a coloured border.
-        if (style == Style.VANILLA) {
+        // Background: the vanilla button sprite (the player's choice, kept as it is), or Woad's own
+        // rounded tile edged in the border colour the player picked.
+        boolean custom = style != Style.VANILLA;
+        if (!custom) {
             ctx.blitSprite(RenderPipelines.GUI_TEXTURED, hover ? BUTTON_HOVER : BUTTON, x, y, SIZE, SIZE);
         } else {
-            ctx.fill(x, y, x + SIZE, y + SIZE, hover ? 0xF0323240 : 0xE01C1C24);
-            int c = 0xFF000000 | (borderColor & 0xFFFFFF);
-            ctx.fill(x, y, x + SIZE, y + 1, c);
-            ctx.fill(x, y + SIZE - 1, x + SIZE, y + SIZE, c);
-            ctx.fill(x, y, x + 1, y + SIZE, c);
-            ctx.fill(x + SIZE - 1, y, x + SIZE, y + SIZE, c);
+            int edge = 0xFF000000 | (borderColor & 0xFFFFFF);
+            if (hover) Draw.shadow(ctx, x, y, SIZE, SIZE, Theme.RADIUS_SLOT, 3f, 0f, Draw.withAlpha(edge, 0.45f));
+            Draw.roundRectV(ctx, x, y, SIZE, SIZE, Theme.RADIUS_SLOT,
+                    hover ? 0xF2213256 : 0xE61A2440, hover ? 0xF2172542 : 0xE6111A2E);
+            Draw.outline(ctx, x, y, SIZE, SIZE, Theme.RADIUS_SLOT, 1f, edge, Draw.mix(edge, 0xFF000000, 0.35f));
         }
 
         // Content: item icon, else a label/number, else a default glyph.
@@ -51,12 +55,38 @@ public final class InvButtonRenderer {
         if (!stack.isEmpty()) {
             ctx.item(stack, x, y);
         } else if (b.label != null && !b.label.isBlank()) {
-            drawLabel(ctx, tr, b.label, x, y);
+            if (custom) drawCustomLabel(ctx, b.label, x, y);
+            else drawLabel(ctx, tr, b.label, x, y);
         } else {
             boolean has = b.command != null && !b.command.isBlank();
-            ctx.centeredText(tr, Component.literal(has ? "»" : "+"),
-                x + SIZE / 2, y + 4, has ? 0xFFE8E8EC : 0xFF8A8A92);
+            if (custom) {
+                if (has) Draw.chevronRight(ctx, x + SIZE / 2f, y + SIZE / 2f, 7f, Theme.TEXT);
+                else Draw.plus(ctx, x + SIZE / 2f, y + SIZE / 2f, 6f, Theme.TEXT_2);
+            } else {
+                ctx.centeredText(tr, Component.literal(has ? "»" : "+"),
+                    x + SIZE / 2, y + 4, has ? 0xFFE8E8EC : 0xFF8A8A92);
+            }
         }
+    }
+
+    /** A label on a Woad-style tile: Inter, shrunk to fit when it is wider than the tile. */
+    private static void drawCustomLabel(GuiGraphicsExtractor ctx, String label, int x, int y) {
+        float w = UiText.width(label, UiText.Style.LABEL);
+        float room = SIZE - 3;
+        if (w <= room) {
+            UiText.draw(ctx, label, UiText.Style.LABEL, x + (SIZE - w) / 2f,
+                    UiText.centerY(UiText.Style.LABEL, y, SIZE), Theme.TEXT);
+            return;
+        }
+        float scale = room / w;
+        Matrix3x2fStack m = ctx.pose();
+        m.pushMatrix();
+        m.translate(x + SIZE / 2f, y + SIZE / 2f);
+        m.scale(scale, scale);
+        float previous = Draw.pushScale(scale);
+        UiText.draw(ctx, label, UiText.Style.LABEL, -w / 2f, -UiText.capHeight(UiText.Style.LABEL) / 2f, Theme.TEXT);
+        Draw.popScale(previous);
+        m.popMatrix();
     }
 
     private static void drawLabel(GuiGraphicsExtractor ctx, Font tr, String label, int x, int y) {

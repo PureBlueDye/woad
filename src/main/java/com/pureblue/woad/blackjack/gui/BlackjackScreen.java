@@ -8,63 +8,64 @@ import com.pureblue.woad.blackjack.game.Hand;
 import com.pureblue.woad.blackjack.game.Player;
 import com.pureblue.woad.blackjack.game.Suit;
 import com.pureblue.woad.blackjack.game.TableView;
-import java.util.ArrayList;
-import java.util.List;
+import com.pureblue.woad.ui.Draw;
+import com.pureblue.woad.ui.Theme;
+import com.pureblue.woad.ui.UiButton;
+import com.pureblue.woad.ui.UiPanel;
+import com.pureblue.woad.ui.UiScreen;
+import com.pureblue.woad.ui.UiSegmented;
+import com.pureblue.woad.ui.UiText;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import org.joml.Matrix3x2fStack;
+
+import java.util.List;
 
 /**
  * A blackjack table drawn like a real casino one: a green felt half-circle with the dealer along the
  * straight (top) edge and the players seated around the curved (bottom) edge, each with their cards
  * fanned in front of them. The player whose turn it is has their name drawn larger and in gold. A bar
  * of buttons sends the mod's commands so the whole game can be driven from here.
+ *
+ * <p>The felt keeps its casino green; everything around it follows Woad's interface.
  */
-public class BlackjackScreen extends Screen {
+public class BlackjackScreen extends UiScreen {
 
-    // ---- Palette --------------------------------------------------------------------------
-    private static final int OVERLAY   = 0x1A000000; // ~10% black, a light dim over the world
-    private static final int BORDER    = 0xFF34343C;
-    private static final int PANEL     = 0xFF1B1B20;
-    private static final int HEADER    = 0xFF202028;
-    private static final int FELT      = 0xFF0E5C32;
-    private static final int FELT_EDGE = 0xFF0A4326;
-    private static final int FELT_LINE = 0x66F4E9C8;
-    private static final int TEXT      = 0xFFE8E8EC;
-    private static final int TEXT_DIM  = 0xFF9A9AA4;
-    private static final int GOLD      = 0xFFFFC83D;
-    private static final int RED_SUIT  = 0xFFC0202E;
-    private static final int BLK_SUIT  = 0xFF161620;
-    private static final int CARD_BG   = 0xFFF4F1E9;
-    private static final int CARD_EDGE = 0xFF24241F;
-    private static final int BACK_BG   = 0xFF24366E;
-    private static final int BACK_IN   = 0xFF3A52A6;
-    private static final int BTN       = 0xFF2A2A33;
-    private static final int BTN_HOVER = 0xFF353541;
-    private static final int BTN_ON    = 0xFF2E6F46;
-    private static final int BTN_DIS   = 0xFF202024;
-    private static final int BTN_TEXT  = 0xFFE8E8EC;
-    private static final int BTN_TDIS  = 0xFF5A5A62;
+    // ---- Table colours ------------------------------------------------------------------------
+    private static final int FELT_CENTRE = 0xFF157A48;
+    private static final int FELT_RIM    = 0xFF0B4D2B;
+    private static final int FELT_EDGE   = 0xFF073A20;
+    private static final int FELT_LINE   = 0x66F4E9C8;
+    private static final int GOLD        = 0xFFFFC83D;
+    private static final int RED_SUIT    = 0xFFC0202E;
+    private static final int BLK_SUIT    = 0xFF161620;
+    private static final int CARD_BG     = 0xFFF6F3EC;
+    private static final int CARD_EDGE   = 0x40000000;
 
     // ---- Layout ---------------------------------------------------------------------------
     private static final int PANEL_W = 470;
     private static final int PANEL_H = 300;
-    private static final int HEADER_H = 28;
+    private static final int HEADER_H = 30;
     private static final int PAD = 12;
     private static final int CW = 22;          // card width
     private static final int CH = 32;          // card height
     private static final int FAN = 14;         // horizontal offset between fanned cards
-    private static final int BTN_H = 20;
+    private static final int BTN_H = 18;
 
     private ChatChannel selectedChannel = ChatChannel.PARTY;
 
-    private final List<Button> buttons = new ArrayList<>();
-
-    private record Button(int x1, int y1, int x2, int y2, String label, boolean enabled,
-                          boolean primary, Runnable onClick) {}
+    private final UiSegmented channel = add(new UiSegmented(List.of("Party", "Guild"),
+            () -> selectedChannel == ChatChannel.PARTY ? 0 : 1,
+            index -> selectedChannel = index == 0 ? ChatChannel.PARTY : ChatChannel.GUILD));
+    private final UiButton create = add(new UiButton("Create", UiButton.Variant.SECONDARY, () -> send("!bj create")));
+    private final UiButton join = add(new UiButton("Join", UiButton.Variant.SECONDARY, () -> send("!bj join")));
+    private final UiButton start = add(new UiButton("Start", UiButton.Variant.PRIMARY, () -> send("!bj start")));
+    private final UiButton closeTable = add(new UiButton("Close", UiButton.Variant.SECONDARY, () -> send("!bj close")));
+    private final UiButton hit = add(new UiButton("Hit", UiButton.Variant.PRIMARY, () -> send("!hit")));
+    private final UiButton stand = add(new UiButton("Stand", UiButton.Variant.PRIMARY, () -> send("!stand")));
+    private final UiButton split = add(new UiButton("Split", UiButton.Variant.SECONDARY, () -> send("!split")));
+    private final UiButton leave = add(new UiButton("Leave", UiButton.Variant.SECONDARY, () -> send("!bj leave")));
 
     public BlackjackScreen() {
         super(Component.literal("Blackjack"));
@@ -77,109 +78,117 @@ public class BlackjackScreen extends Screen {
 
     @Override
     public void extractBackground(GuiGraphicsExtractor context, int mouseX, int mouseY, float delta) {
-        // No-op: the vanilla background applies the menu blur + darkening, which we don't want.
+        // A light dim only: the table is meant to sit over the game, not hide it behind a blur.
+        Draw.rect(context, 0, 0, this.width, this.height, 0x260B1220);
     }
 
     // ---- Render ---------------------------------------------------------------------------
 
     @Override
-    public void extractRenderState(GuiGraphicsExtractor context, int mouseX, int mouseY, float delta) {
-        context.fill(0, 0, this.width, this.height, OVERLAY);
-
-        int x = (this.width - PANEL_W) / 2;
-        int y = (this.height - PANEL_H) / 2;
-
-        panel(context, x, y, x + PANEL_W, y + PANEL_H, PANEL, BORDER);
-        context.fill(x + 1, y + 1, x + PANEL_W - 1, y + HEADER_H, HEADER);
-        context.text(this.font, "Blackjack", x + PAD, y + 10, GOLD, false);
+    protected void renderContent(GuiGraphicsExtractor context, int mouseX, int mouseY, float delta) {
+        float x = Math.round((this.width - PANEL_W) / 2f);
+        float y = Math.round((this.height - PANEL_H) / 2f);
+        UiPanel.panel(context, x, y, PANEL_W, PANEL_H);
 
         TableView view = BlackjackManager.currentView();
         ChatChannel active = BlackjackManager.currentChannel();
-        drawStatus(context, x, y, view, active);
+        renderHeader(context, x, y, view, active, mouseX, mouseY);
 
-        int feltTop = y + HEADER_H + 6;
-        int row1Y = y + PANEL_H - 50;
-        int feltBottom = row1Y - 8;
-        int cx = x + PANEL_W / 2;
-        int rx = (PANEL_W - 2 * PAD) / 2;
-        int ry = feltBottom - feltTop;
+        float feltTop = y + HEADER_H + 7;
+        float row1Y = y + PANEL_H - PAD - BTN_H * 2 - 6;
+        float feltBottom = row1Y - 9;
+        float cx = x + PANEL_W / 2f;
+        float rx = (PANEL_W - 2 * PAD) / 2f;
+        float ry = feltBottom - feltTop;
 
         drawFelt(context, cx, feltTop, rx, ry);
 
-        // Center markings.
-        drawCentered(context, "BLACKJACK PAYS 3 TO 2", cx, feltTop + (int) (ry * 0.42), FELT_LINE);
-        drawCentered(context, "Dealer must stand on 17", cx, feltTop + (int) (ry * 0.42) + 11, FELT_LINE);
+        // Centre markings.
+        float markY = feltTop + ry * 0.42f;
+        UiText.drawCentered(context, "BLACKJACK PAYS 3 TO 2", UiText.Style.LABEL, cx, markY, FELT_LINE);
+        UiText.drawCentered(context, "Dealer must stand on 17", UiText.Style.BODY, cx, markY + 11, FELT_LINE);
 
         if (view == null) {
-            drawCentered(context, "No table open - pick a channel and click Create.", cx, feltTop + 30, TEXT_DIM);
+            UiText.drawCentered(context, "No table open - pick a channel and click Create.", UiText.Style.BODY,
+                    cx, feltTop + 30, 0xCCFFFFFF);
         } else {
             drawDealer(context, cx, feltTop + 6, view);
             drawSeats(context, view, cx, feltTop, rx, ry);
         }
 
-        buttons.clear();
         layoutButtons(context, x, y, mouseX, mouseY, view);
     }
 
-    private void drawStatus(GuiGraphicsExtractor context, int x, int y, TableView view, ChatChannel active) {
-        String status;
-        if (view == null) {
-            status = "Channel: " + selectedChannel.label();
+    private void renderHeader(GuiGraphicsExtractor context, float x, float y, TableView view, ChatChannel active,
+                              int mouseX, int mouseY) {
+        UiText.draw(context, "Blackjack", UiText.Style.TITLE, x + 14, UiText.centerY(UiText.Style.TITLE, y, HEADER_H), Theme.TEXT);
+
+        // The chat channel can only be chosen before a table exists; after that it is fixed.
+        boolean noTable = view == null;
+        channel.visible(noTable).enabled(noTable);
+        if (noTable) {
+            float cw = channel.preferredWidth();
+            channel.bounds(x + PANEL_W / 2f - cw / 2f, y + (HEADER_H - 16) / 2f, cw, 16).render(context, mouseX, mouseY);
         } else {
-            String phase = view.phase() == GamePhase.IN_ROUND ? "In round" : "Lobby";
-            status = (active != null ? active.label() : "?") + " - " + phase;
+            String label = active != null ? active.label() : "Chat";
+            float pw = UiText.width(label, UiText.Style.LABEL) + 12;
+            UiPanel.pill(context, label, x + PANEL_W / 2f - pw / 2f, y + (HEADER_H - 12) / 2f, Theme.CYAN, Theme.GLOW_SOFT);
         }
-        context.text(this.font, status,
-                x + PANEL_W - PAD - this.font.width(status), y + 10, TEXT_DIM, false);
+
+        String status;
+        int colour;
+        int fill;
+        if (noTable) {
+            status = "No table";
+            colour = Theme.TEXT_2;
+            fill = Theme.NEUTRAL_TINT;
+        } else if (view.phase() == GamePhase.IN_ROUND) {
+            status = "In round";
+            colour = Theme.OK;
+            fill = Theme.OK_TINT;
+        } else {
+            status = "Lobby";
+            colour = Theme.CYAN;
+            fill = Theme.GLOW_SOFT;
+        }
+        float sw = UiText.width(status, UiText.Style.LABEL) + 12;
+        UiPanel.pill(context, status, x + PANEL_W - 14 - sw, y + (HEADER_H - 12) / 2f, colour, fill);
+        UiPanel.hairline(context, x, x + PANEL_W, y + HEADER_H);
     }
 
     /** A green felt half-ellipse: straight edge on top (dealer), curved edge below (players). */
-    private void drawFelt(GuiGraphicsExtractor context, int cx, int top, int rx, int ry) {
-        for (int dy = 0; dy <= ry; dy++) {
-            double f = (double) dy / ry;
-            int hw = (int) (rx * Math.sqrt(Math.max(0, 1 - f * f)));
-            int edgeHw = hw;
-            int innerHw = Math.max(0, hw - 3);
-            int yy = top + dy;
-            context.fill(cx - edgeHw, yy, cx - innerHw, yy + 1, FELT_EDGE);
-            context.fill(cx + innerHw, yy, cx + edgeHw, yy + 1, FELT_EDGE);
-            context.fill(cx - innerHw, yy, cx + innerHw, yy + 1, FELT);
-        }
-        // Straight top edge band.
-        context.fill(cx - rx, top, cx + rx, top + 2, FELT_EDGE);
+    private void drawFelt(GuiGraphicsExtractor context, float cx, float top, float rx, float ry) {
+        Draw.halfEllipse(context, cx, top, rx, ry, FELT_CENTRE, FELT_RIM);
+        // A padded rim along the curve and the straight dealer's edge.
+        Draw.halfEllipseStroke(context, cx, top, rx - 1.5f, ry - 1.5f, 3f, FELT_EDGE);
+        Draw.rect(context, cx - rx, top, cx + rx, top + 2.5f, FELT_EDGE);
         // Decorative inner arc line.
-        int ir = ry - 24;
-        int irx = rx - 24;
-        if (ir > 0 && irx > 0) {
-            for (int dy = 0; dy <= ir; dy++) {
-                double f = (double) dy / ir;
-                int hw = (int) (irx * Math.sqrt(Math.max(0, 1 - f * f)));
-                int yy = top + 12 + dy;
-                context.fill(cx - hw, yy, cx - hw + 1, yy + 1, FELT_LINE);
-                context.fill(cx + hw - 1, yy, cx + hw, yy + 1, FELT_LINE);
-            }
+        float irx = rx - 24;
+        float iry = ry - 24;
+        if (irx > 0 && iry > 0) {
+            Draw.halfEllipseStroke(context, cx, top + 12, irx, iry, 1f, FELT_LINE);
         }
     }
 
-    private void drawDealer(GuiGraphicsExtractor context, int cx, int topY, TableView view) {
+    private void drawDealer(GuiGraphicsExtractor context, float cx, float topY, TableView view) {
         Hand dealer = view.dealer();
         List<Card> cards = dealer.cards();
         if (cards.isEmpty()) {
-            drawCentered(context, "DEALER", cx, topY + 14, TEXT);
+            UiText.drawCentered(context, "DEALER", UiText.Style.LABEL, cx, topY + 14, Theme.TEXT);
             return;
         }
         drawCardsCentered(context, cx, topY, cards, true, view.isDealerRevealed());
         String total = view.isDealerRevealed()
                 ? "DEALER  " + dealer.total()
                 : "DEALER  " + cards.get(0).rank().value() + "+?";
-        drawCentered(context, total, cx, topY + CH + 2, TEXT);
+        UiText.drawCentered(context, total, UiText.Style.LABEL, cx, topY + CH + 4, Theme.TEXT);
     }
 
     /** Players seated around the curved bottom edge, each lower toward the middle like a real table. */
-    private void drawSeats(GuiGraphicsExtractor context, TableView view, int cx, int feltTop, int rx, int ry) {
+    private void drawSeats(GuiGraphicsExtractor context, TableView view, float cx, float feltTop, float rx, float ry) {
         List<Player> players = view.players();
         if (players.isEmpty()) {
-            drawCentered(context, "No players seated - click Join.", cx, feltTop + ry - 30, TEXT_DIM);
+            UiText.drawCentered(context, "No players seated - click Join.", UiText.Style.BODY, cx, feltTop + ry - 30, 0xCCFFFFFF);
             return;
         }
         String turn = view.currentTurnName();
@@ -190,19 +199,19 @@ public class BlackjackScreen extends Screen {
         for (int i = 0; i < n; i++) {
             Player player = players.get(i);
             double fx = n == 1 ? 0.5 : (i + 0.5) / n;
-            int seatX = (int) (cx + (fx - 0.5) * 2 * spread);
-            double frac = (double) (seatX - cx) / rx;
-            int edgeY = feltTop + (int) (ry * Math.sqrt(Math.max(0, 1 - frac * frac)));
+            float seatX = (float) (cx + (fx - 0.5) * 2 * spread);
+            double frac = (seatX - cx) / rx;
+            float edgeY = feltTop + (float) (ry * Math.sqrt(Math.max(0, 1 - frac * frac)));
             boolean isTurn = player.name().equalsIgnoreCase(turn);
             drawSeat(context, player, seatX, edgeY - 6, isTurn, activeHand);
         }
     }
 
-    private void drawSeat(GuiGraphicsExtractor context, Player player, int seatX, int bottomY,
+    private void drawSeat(GuiGraphicsExtractor context, Player player, float seatX, float bottomY,
                           boolean isTurn, int activeHand) {
         List<Hand> hands = player.hands();
-        int nameY = bottomY - 9;
-        int cardsTopY = nameY - CH - 3;
+        float nameY = bottomY - 9;
+        float cardsTopY = nameY - CH - 4;
 
         if (hands.size() == 1) {
             drawCardsCentered(context, seatX, cardsTopY, hands.get(0).cards(), false, true);
@@ -211,118 +220,78 @@ public class BlackjackScreen extends Screen {
             // Split: two compact hands side by side, active one tagged in gold.
             int half = 34;
             for (int h = 0; h < hands.size(); h++) {
-                int hx = seatX + (h == 0 ? -half : half);
+                float hx = seatX + (h == 0 ? -half : half);
                 drawCardsCentered(context, hx, cardsTopY, hands.get(h).cards(), false, true);
                 boolean activeHere = isTurn && h == activeHand;
                 drawHandTag(context, hands.get(h), hx, cardsTopY - 10, activeHere);
-                drawCentered(context, "#" + (h + 1), hx, cardsTopY + CH + 1, activeHere ? GOLD : TEXT_DIM);
+                UiText.drawCentered(context, "#" + (h + 1), UiText.Style.LABEL, hx, cardsTopY + CH + 2,
+                        activeHere ? GOLD : Theme.TEXT_2);
             }
         }
 
         if (isTurn) {
-            drawScaledCentered(context, player.name(), seatX, nameY + 3, 1.25f, GOLD);
+            // The player to act: gold name on a soft gold glow.
+            float w = UiText.width(player.name(), UiText.Style.LABEL) + 12;
+            Draw.shadow(context, seatX - w / 2f, nameY - 3, w, 12, 6f, 5f, 0f, 0x55FFC83D);
+            Draw.roundRect(context, seatX - w / 2f, nameY - 3, w, 12, 6f, 0x33FFC83D);
+            UiText.drawCentered(context, player.name(), UiText.Style.LABEL, seatX, nameY, GOLD);
         } else {
-            drawCentered(context, player.name(), seatX, nameY, TEXT);
+            UiText.drawCentered(context, player.name(), UiText.Style.LABEL, seatX, nameY, Theme.TEXT);
         }
     }
 
     /** Small total/status tag above a hand (BUST / BLACKJACK / total). */
-    private void drawHandTag(GuiGraphicsExtractor context, Hand hand, int cx, int y, boolean active) {
+    private void drawHandTag(GuiGraphicsExtractor context, Hand hand, float cx, float y, boolean active) {
         String tag;
         int color;
         if (hand.cards().isEmpty()) {
             return;
         } else if (hand.isBust()) {
             tag = "BUST " + hand.total();
-            color = RED_SUIT;
+            color = 0xFFFF6B6B;
         } else if (hand.isBlackjack()) {
             tag = "BJ";
             color = GOLD;
         } else if (hand.hasStood()) {
             tag = "STAND " + hand.total();
-            color = TEXT_DIM;
+            color = 0xFFB8C4D6;
         } else {
             tag = String.valueOf(hand.total());
-            color = active ? GOLD : TEXT;
+            color = active ? GOLD : Theme.TEXT;
         }
-        drawCentered(context, tag, cx, y, color);
+        UiText.drawCentered(context, tag, UiText.Style.LABEL, cx, y, color);
     }
 
     // ---- Buttons --------------------------------------------------------------------------
 
-    private void layoutButtons(GuiGraphicsExtractor context, int x, int y, int mouseX, int mouseY, TableView view) {
+    private void layoutButtons(GuiGraphicsExtractor context, float x, float y, int mouseX, int mouseY, TableView view) {
         boolean noTable = view == null;
         boolean lobby = view != null && view.phase() == GamePhase.LOBBY;
         boolean inRound = view != null && view.phase() == GamePhase.IN_ROUND;
         boolean hasPlayers = view != null && !view.players().isEmpty();
 
-        // Channel toggle lives in the header (only meaningful before a table exists).
-        String chanLabel = noTable ? "Chat: " + selectedChannel.label()
-                : (BlackjackManager.currentChannel() != null ? BlackjackManager.currentChannel().label() : "Chat");
-        int ctw = 78;
-        addButton(context, x + PANEL_W / 2 - ctw / 2, y + 5, ctw, 16, chanLabel, noTable, false,
-                this::toggleChannel, mouseX, mouseY);
+        create.enabled(noTable);
+        join.enabled(lobby);
+        start.enabled(lobby && hasPlayers);
+        closeTable.enabled(!noTable);
+        hit.enabled(inRound);
+        stand.enabled(inRound);
+        split.enabled(inRound);
+        leave.enabled(!noTable);
 
-        int gap = 6;
-        int left = x + PAD;
-        int right = x + PANEL_W - PAD;
-        int colW = (right - left - gap * 3) / 4;
-        int row1 = y + PANEL_H - 50;
-        int row2 = row1 + BTN_H + gap;
+        float gap = 6;
+        float left = x + PAD;
+        float right = x + PANEL_W - PAD;
+        float colW = (right - left - gap * 3) / 4;
+        float row1 = y + PANEL_H - PAD - BTN_H * 2 - 6;
+        float row2 = row1 + BTN_H + 6;
 
-        addButton(context, col(left, colW, gap, 0), row1, colW, BTN_H, "Create", noTable, false,
-                () -> send("!bj create"), mouseX, mouseY);
-        addButton(context, col(left, colW, gap, 1), row1, colW, BTN_H, "Join", lobby, false,
-                () -> send("!bj join"), mouseX, mouseY);
-        addButton(context, col(left, colW, gap, 2), row1, colW, BTN_H, "Start", lobby && hasPlayers, true,
-                () -> send("!bj start"), mouseX, mouseY);
-        addButton(context, col(left, colW, gap, 3), row1, colW, BTN_H, "Close", !noTable, false,
-                () -> send("!bj close"), mouseX, mouseY);
-
-        addButton(context, col(left, colW, gap, 0), row2, colW, BTN_H, "Hit", inRound, true,
-                () -> send("!hit"), mouseX, mouseY);
-        addButton(context, col(left, colW, gap, 1), row2, colW, BTN_H, "Stand", inRound, true,
-                () -> send("!stand"), mouseX, mouseY);
-        addButton(context, col(left, colW, gap, 2), row2, colW, BTN_H, "Split", inRound, false,
-                () -> send("!split"), mouseX, mouseY);
-        addButton(context, col(left, colW, gap, 3), row2, colW, BTN_H, "Leave", !noTable, false,
-                () -> send("!bj leave"), mouseX, mouseY);
-    }
-
-    private static int col(int left, int colW, int gap, int i) {
-        return left + i * (colW + gap);
-    }
-
-    private void addButton(GuiGraphicsExtractor context, int bx, int by, int w, int h, String label, boolean enabled,
-                           boolean primary, Runnable onClick, int mouseX, int mouseY) {
-        int x2 = bx + w;
-        int y2 = by + h;
-        boolean hovered = enabled && inside(mouseX, mouseY, bx, by, x2, y2);
-        int bg = !enabled ? BTN_DIS : (primary ? BTN_ON : (hovered ? BTN_HOVER : BTN));
-        fillRound(context, bx, by, x2, y2, bg);
-        int color = enabled ? BTN_TEXT : BTN_TDIS;
-        context.text(this.font, label,
-                bx + (w - this.font.width(label)) / 2, by + (h - 8) / 2, color, false);
-        buttons.add(new Button(bx, by, x2, y2, label, enabled, primary, onClick));
-    }
-
-    private void toggleChannel() {
-        selectedChannel = selectedChannel == ChatChannel.PARTY ? ChatChannel.GUILD : ChatChannel.PARTY;
-    }
-
-    @Override
-    public boolean mouseClicked(MouseButtonEvent click, boolean doubled) {
-        if (click.button() == 0) {
-            int mx = (int) click.x();
-            int my = (int) click.y();
-            for (Button b : buttons) {
-                if (b.enabled() && inside(mx, my, b.x1(), b.y1(), b.x2(), b.y2())) {
-                    b.onClick().run();
-                    return true;
-                }
-            }
+        UiButton[] top = {create, join, start, closeTable};
+        UiButton[] bottom = {hit, stand, split, leave};
+        for (int i = 0; i < 4; i++) {
+            top[i].bounds(left + i * (colW + gap), row1, colW, BTN_H).render(context, mouseX, mouseY);
+            bottom[i].bounds(left + i * (colW + gap), row2, colW, BTN_H).render(context, mouseX, mouseY);
         }
-        return super.mouseClicked(click, doubled);
     }
 
     // ---- Command sending ------------------------------------------------------------------
@@ -340,13 +309,13 @@ public class BlackjackScreen extends Screen {
 
     // ---- Card drawing ---------------------------------------------------------------------
 
-    private void drawCardsCentered(GuiGraphicsExtractor context, int centerX, int topY, List<Card> cards,
+    private void drawCardsCentered(GuiGraphicsExtractor context, float centerX, float topY, List<Card> cards,
                                    boolean dealerHidden, boolean revealed) {
         if (cards.isEmpty()) return;
-        int span = (cards.size() - 1) * FAN + CW;
-        int startX = centerX - span / 2;
+        float span = (cards.size() - 1) * FAN + CW;
+        float startX = centerX - span / 2f;
         for (int i = 0; i < cards.size(); i++) {
-            int cxp = startX + i * FAN;
+            float cxp = startX + i * FAN;
             if (dealerHidden && i == 1 && !revealed) {
                 drawCardBack(context, cxp, topY);
             } else {
@@ -355,51 +324,34 @@ public class BlackjackScreen extends Screen {
         }
     }
 
-    private void drawCard(GuiGraphicsExtractor context, int x, int y, Card card) {
-        fillRound(context, x + 1, y + 1, x + CW + 1, y + CH + 1, 0x55000000); // shadow
-        panel(context, x, y, x + CW, y + CH, CARD_BG, CARD_EDGE);
+    private void drawCard(GuiGraphicsExtractor context, float x, float y, Card card) {
+        Draw.shadow(context, x, y, CW, CH, 2.5f, 4f, 1.5f, 0x66000000);
+        Draw.roundRectV(context, x, y, CW, CH, 2.5f, CARD_BG, 0xFFE9E4D8);
+        Draw.outline(context, x, y, CW, CH, 2.5f, 1f, CARD_EDGE);
         int suitColor = (card.suit() == Suit.HEARTS || card.suit() == Suit.DIAMONDS) ? RED_SUIT : BLK_SUIT;
-        context.text(this.font, card.rank().label(), x + 2, y + 2, suitColor, false);
-        drawScaledCentered(context, card.suit().symbol(), x + CW / 2, y + CH / 2 + 3, 1.5f, suitColor);
+        UiText.draw(context, card.rank().label(), UiText.Style.LABEL, x + 2.5f, y + 3, suitColor);
+        drawScaledCentered(context, card.suit().symbol(), x + CW / 2f, y + CH / 2f + 3, 1.6f, suitColor);
     }
 
-    private void drawCardBack(GuiGraphicsExtractor context, int x, int y) {
-        fillRound(context, x + 1, y + 1, x + CW + 1, y + CH + 1, 0x55000000);
-        panel(context, x, y, x + CW, y + CH, BACK_BG, CARD_EDGE);
-        fillRound(context, x + 3, y + 3, x + CW - 3, y + CH - 3, BACK_IN);
-        drawScaledCentered(context, "?", x + CW / 2, y + CH / 2 + 3, 1.4f, 0xFFD8E0FF);
+    private void drawCardBack(GuiGraphicsExtractor context, float x, float y) {
+        Draw.shadow(context, x, y, CW, CH, 2.5f, 4f, 1.5f, 0x66000000);
+        Draw.roundRectDiagonal(context, x, y, CW, CH, 2.5f, Theme.FILL, Theme.FILL_DEEP);
+        Draw.outline(context, x + 2.5f, y + 2.5f, CW - 5, CH - 5, 1.5f, 1f, 0x80BFD7FF);
+        drawScaledCentered(context, "?", x + CW / 2f, y + CH / 2f + 1, 1.4f, 0xFFD8E4FF);
     }
 
     // ---- Drawing helpers ------------------------------------------------------------------
 
-    private void drawCentered(GuiGraphicsExtractor context, String text, int cx, int y, int color) {
-        context.text(this.font, text, cx - this.font.width(text) / 2, y, color, false);
-    }
-
-    private void drawScaledCentered(GuiGraphicsExtractor context, String text, int cx, int cy, float scale, int color) {
+    /** Draws {@code text} centred on (cx, cy) at a scale, e.g. a card's suit. */
+    private void drawScaledCentered(GuiGraphicsExtractor context, String text, float cx, float cy, float scale, int color) {
         Matrix3x2fStack m = context.pose();
         m.pushMatrix();
         m.translate(cx, cy);
         m.scale(scale);
-        context.text(this.font, text, -this.font.width(text) / 2, -4, color, false);
+        float previous = Draw.pushScale(scale);
+        UiText.Style style = UiText.Style.LABEL;
+        UiText.draw(context, text, style, -UiText.width(text, style) / 2f, -UiText.capHeight(style) / 2f - 2f, color);
+        Draw.popScale(previous);
         m.popMatrix();
-    }
-
-    private static void panel(GuiGraphicsExtractor context, int x1, int y1, int x2, int y2, int fill, int border) {
-        fillRound(context, x1, y1, x2, y2, border);
-        fillRound(context, x1 + 1, y1 + 1, x2 - 1, y2 - 1, fill);
-    }
-
-    private static void fillRound(GuiGraphicsExtractor context, int x1, int y1, int x2, int y2, int color) {
-        if (x2 - x1 < 2 || y2 - y1 < 2) {
-            context.fill(x1, y1, x2, y2, color);
-            return;
-        }
-        context.fill(x1 + 1, y1, x2 - 1, y2, color);
-        context.fill(x1, y1 + 1, x2, y2 - 1, color);
-    }
-
-    private static boolean inside(int px, int py, int x1, int y1, int x2, int y2) {
-        return px >= x1 && px <= x2 && py >= y1 && py <= y2;
     }
 }

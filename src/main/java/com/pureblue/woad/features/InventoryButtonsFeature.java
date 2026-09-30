@@ -11,6 +11,9 @@ import com.pureblue.woad.gui.InvButtonRenderer;
 import com.pureblue.woad.gui.InventoryButtonsScreen;
 import com.pureblue.woad.gui.InventoryGrid;
 import com.pureblue.woad.mixin.HandledScreenAccessor;
+import com.pureblue.woad.ui.Theme;
+import com.pureblue.woad.ui.UiButton;
+import com.pureblue.woad.ui.UiTooltip;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.input.MouseButtonEvent;
@@ -65,12 +68,10 @@ public class InventoryButtonsFeature extends Feature {
 
     private final List<CmdButton> buttons = new ArrayList<>();
     private Style style = Style.CUSTOM;
-    private int borderColor = Woad.ACCENT & 0xFFFFFF;
+    private int borderColor = Theme.ACCENT & 0xFFFFFF;
 
     public InventoryButtonsFeature() {
-        super("inv_buttons", "Inventory Buttons",
-                "Clickable command buttons in your inventory. Left-click runs the command, "
-                        + "right-click edits it. Place and style them with Open.",
+        super("inv_buttons", "Inventory Buttons", "",
                 true);
     }
 
@@ -130,63 +131,31 @@ public class InventoryButtonsFeature extends Feature {
         return new InventoryButtonsScreen(parent, this);
     }
 
-    // ---- Extra menu controls (style + border colour), shown below the Open button ----------
+    // ---- Extra menu controls (style + border colour), next to the Open button ----------------
 
-    private final int[] styleRect = new int[4];
-    private final int[] colorRect = new int[4];
+    private final UiButton styleButton = new UiButton("", UiButton.Variant.SECONDARY,
+            () -> setStyle(style == Style.VANILLA ? Style.CUSTOM : Style.VANILLA));
+    private final UiButton borderButton = new UiButton("Border color", UiButton.Variant.SECONDARY, () ->
+            Minecraft.getInstance().setScreen(new HexPromptScreen(Minecraft.getInstance().screen,
+                    String.format("#%06X", borderColor), this::setBorderColor)));
 
     @Override
     public void renderExtra(GuiGraphicsExtractor ctx, Screen parent, int left, int y, int right, int mouseX, int mouseY) {
-        Font tr = Minecraft.getInstance().font;
-        int w = right - left;
-
-        String styleLabel = "Style: " + (style == Style.VANILLA ? "Vanilla" : "Custom");
-        drawControl(ctx, tr, styleRect, left, y, w, styleLabel, mouseX, mouseY);
-
-        int y2 = y + 20;
-        int swatch = 16;
-        drawControl(ctx, tr, colorRect, left, y2, w - swatch - 4, "Border color", mouseX, mouseY);
-        ctx.fill(right - swatch, y2, right, y2 + 16, 0xFF000000 | borderColor);
-        ctx.fill(right - swatch, y2, right, y2 + 1, 0xFF45454F);
-        ctx.fill(right - swatch, y2 + 15, right, y2 + 16, 0xFF45454F);
-        ctx.fill(right - swatch, y2, right - swatch + 1, y2 + 16, 0xFF45454F);
-        ctx.fill(right - 1, y2, right, y2 + 16, 0xFF45454F);
+        styleButton.label("Style: " + (style == Style.VANILLA ? "Vanilla" : "Custom"));
+        styleButton.bounds(left, y, styleButton.preferredWidth(), Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
+        borderButton.swatch(borderColor & 0xFFFFFF);
+        borderButton.bounds(left + styleButton.width() + 4, y, borderButton.preferredWidth(), Theme.BUTTON_H_SMALL)
+                .render(ctx, mouseX, mouseY);
     }
 
     @Override
     public int extraHeight() {
-        return 40;
+        return Theme.BUTTON_H_SMALL;
     }
 
     @Override
     public boolean extraMouseClicked(Screen parent, double mx, double my, int button) {
-        if (button != 0) return false;
-        if (inRect(styleRect, mx, my)) {
-            setStyle(style == Style.VANILLA ? Style.CUSTOM : Style.VANILLA);
-            return true;
-        }
-        if (inRect(colorRect, mx, my)) {
-            Minecraft.getInstance().setScreen(new HexPromptScreen(parent,
-                String.format("#%06X", borderColor), this::setBorderColor));
-            return true;
-        }
-        return false;
-    }
-
-    private void drawControl(GuiGraphicsExtractor ctx, Font tr, int[] rect, int x, int y, int w, String label, int mouseX, int mouseY) {
-        int h = 16;
-        boolean hovered = mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
-        ctx.fill(x, y, x + w, y + h, hovered ? 0xFF3A3A44 : 0xFF26262C);
-        ctx.fill(x, y, x + w, y + 1, 0xFF45454F);
-        ctx.fill(x, y + h - 1, x + w, y + h, 0xFF45454F);
-        ctx.fill(x, y, x + 1, y + h, 0xFF45454F);
-        ctx.fill(x + w - 1, y, x + w, y + h, 0xFF45454F);
-        ctx.text(tr, label, x + 6, y + 4, 0xFFE8E8EC, false);
-        rect[0] = x; rect[1] = y; rect[2] = x + w; rect[3] = y + h;
-    }
-
-    private static boolean inRect(int[] r, double mx, double my) {
-        return mx >= r[0] && mx <= r[2] && my >= r[1] && my <= r[3];
+        return styleButton.mouseClicked(mx, my, button) || borderButton.mouseClicked(mx, my, button);
     }
 
     // ---- Live inventory rendering + input -------------------------------------------------
@@ -208,10 +177,19 @@ public class InventoryButtonsFeature extends Feature {
                 tooltip = !b.command.isBlank() ? b.command : "Right-click to set a command";
             }
         }
-        if (tooltip != null) {
-            ctx.setTooltipForNextFrame(Minecraft.getInstance().font, Component.literal(tooltip), mouseX, mouseY);
+        if (style == Style.VANILLA) {
+            // The vanilla look was the player's choice, so its tooltip stays vanilla too.
+            if (tooltip != null) {
+                ctx.setTooltipForNextFrame(Minecraft.getInstance().font, Component.literal(tooltip), mouseX, mouseY);
+            }
+        } else {
+            if (tooltip != null) inventoryTooltip.offer(tooltip, List.of(tooltip));
+            inventoryTooltip.render(ctx, mouseX, mouseY, screen.width, screen.height);
         }
     }
+
+    /** Tooltip for the Woad-style buttons in the live inventory. */
+    private final UiTooltip inventoryTooltip = new UiTooltip();
 
     /** Handles a click on an open container GUI; returns true if it hit a button (cancel vanilla). */
     public boolean onInventoryClick(AbstractContainerScreen<?> screen, MouseButtonEvent click) {

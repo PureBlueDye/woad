@@ -1,61 +1,55 @@
 package com.pureblue.woad.gui;
 
+import com.pureblue.woad.ui.Draw;
+import com.pureblue.woad.ui.Theme;
+import com.pureblue.woad.ui.UiDialog;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.network.chat.Component;
 
 import java.util.function.IntConsumer;
 
-/** Tiny popup to type a hex colour; calls {@code onConfirm} with the parsed 0xRRGGBB value. */
-public class HexPromptScreen extends Screen {
+/**
+ * Asks for a hex colour; calls {@code onConfirm} with the parsed 0xRRGGBB value.
+ *
+ * <p>A swatch beside the field shows the colour as it is typed, and the field turns red while the
+ * text is not a valid colour. OK still closes either way, and only a valid colour is applied —
+ * as before.
+ */
+public class HexPromptScreen extends UiDialog {
 
-    private static final int PANEL_W = 160;
-    private static final int PANEL_H = 96;
-
-    private final Screen parent;
-    private final String initial;
     private final IntConsumer onConfirm;
-    private EditBox field;
 
     public HexPromptScreen(Screen parent, String initialHex, IntConsumer onConfirm) {
-        super(Component.literal("Hex color"));
-        this.parent = parent;
-        this.initial = initialHex;
+        super(parent, "Hex color", null, initialHex, 7);
         this.onConfirm = onConfirm;
     }
 
     @Override
-    protected void init() {
-        int left = (this.width - PANEL_W) / 2;
-        int top = (this.height - PANEL_H) / 2;
-
-        this.field = new EditBox(this.font, left + 20, top + 36, PANEL_W - 40, 18,
-            Component.literal("hex"));
-        this.field.setMaxLength(7);
-        this.field.setValue(initial);
-        this.setInitialFocus(this.field);
-        this.addRenderableWidget(this.field);
-
-        int btnW = (PANEL_W - 40 - 6) / 2;
-        this.addRenderableWidget(Button.builder(Component.literal("OK"), b -> confirm())
-            .bounds(left + 20, top + 62, btnW, 20).build());
-        this.addRenderableWidget(Button.builder(Component.literal("Cancel"), b -> onClose())
-            .bounds(left + 20 + btnW + 6, top + 62, btnW, 20).build());
-    }
-
-    private void confirm() {
-        Integer rgb = parseHex(this.field.getValue());
+    protected void confirm(String value) {
+        Integer rgb = parseHex(value);
         if (rgb != null) {
             onConfirm.accept(rgb);
         }
-        onClose();
     }
 
     @Override
-    public void onClose() {
-        this.minecraft.setScreen(parent);
+    protected int fieldAccessoryWidth() {
+        return Theme.FIELD_H;
+    }
+
+    @Override
+    protected void drawFieldAccessory(GuiGraphicsExtractor ctx, float x, float y, float size) {
+        Integer rgb = parseHex(field.value());
+        // Half-typed values ("#", "#FF8") are not errors yet; a full-length wrong one is.
+        String typed = field.value().trim();
+        field.invalid(rgb == null && typed.replace("#", "").length() >= 6);
+        if (rgb != null) {
+            Draw.roundRect(ctx, x, y, size, size, Theme.RADIUS_CONTROL, 0xFF000000 | rgb);
+        } else {
+            Draw.roundRect(ctx, x, y, size, size, Theme.RADIUS_CONTROL, Theme.INSET);
+            Draw.line(ctx, x + 4, y + size - 4, x + size - 4, y + 4, 1.2f, Theme.TEXT_3);
+        }
+        Draw.outline(ctx, x, y, size, size, Theme.RADIUS_CONTROL, 1f, 0x2EFFFFFF);
     }
 
     static Integer parseHex(String text) {
@@ -71,21 +65,5 @@ public class HexPromptScreen extends Screen {
         } catch (NumberFormatException e) {
             return null;
         }
-    }
-
-    @Override
-    public void extractRenderState(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
-        int left = (this.width - PANEL_W) / 2;
-        int top = (this.height - PANEL_H) / 2;
-        ctx.fill(0, 0, this.width, this.height, 0x80000000);
-        ctx.fill(left, top, left + PANEL_W, top + PANEL_H, 0xF0101010);
-        ctx.centeredText(this.font, Component.literal("Hex color"),
-            this.width / 2, top + 12, 0xFFFFFFFF);
-        super.extractRenderState(ctx, mouseX, mouseY, delta);
-    }
-
-    @Override
-    public void extractBackground(GuiGraphicsExtractor ctx, int mouseX, int mouseY, float delta) {
-        // Dim drawn in render().
     }
 }
