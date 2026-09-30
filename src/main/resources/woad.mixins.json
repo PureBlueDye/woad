@@ -10,7 +10,8 @@
     "HandledScreenMixin",
     "ChatHudAccessor",
     "ConnectionBindMixin",
-    "ItemRefreshMixin"
+    "ItemRefreshMixin",
+    "FluidStateModelSetMixin"
   ],
   "injectors": {
     "defaultRequire": 1

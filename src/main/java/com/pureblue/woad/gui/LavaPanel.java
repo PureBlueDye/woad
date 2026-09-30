@@ -141,15 +141,15 @@ public class LavaPanel {
                     String.format("#%06X", currentColor), this::applyColor));
                 return true;
             }
+            // Both are instant now: the lava sprite is never repainted, so there is nothing to
+            // reload — only the chunk meshes are rebuilt, inside commitTexture()/reset().
             if (in(applyBtn, mx, my)) {
                 LavaColorManager.INSTANCE.commitTexture();
-                Minecraft.getInstance().reloadResourcePacks();
                 return true;
             }
             if (in(resetBtn, mx, my)) {
                 LavaColorManager.INSTANCE.reset();
                 currentColor = LavaColorManager.DEFAULT_COLOR;
-                Minecraft.getInstance().reloadResourcePacks();
                 return true;
             }
         }

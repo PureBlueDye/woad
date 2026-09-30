@@ -1,0 +1,12 @@
+{
+  "sources": [
+    {
+      "type": "single",
+      "resource": "woad:block/lava_tint_still"
+    },
+    {
+      "type": "single",
+      "resource": "woad:block/lava_tint_flow"
+    }
+  ]
+}
