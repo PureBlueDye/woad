@@ -1,6 +1,7 @@
 package com.pureblue.woad.ai;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -18,8 +19,10 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>Wire format per the official Messages API reference: {@code x-api-key} +
  * {@code anthropic-version: 2023-06-01} headers; body carries {@code model}, {@code max_tokens},
- * a top-level {@code system} prompt and a single user message. The response's {@code content} is
- * an array of blocks — the reply is the first {@code text} block. {@code stop_reason} may be
+ * a top-level {@code system} prompt, the conversation and the {@code tools}. The response's
+ * {@code content} is an array of blocks. When {@code stop_reason} is {@code "tool_use"} the
+ * {@code tool_use} blocks are run and answered with {@code tool_result} blocks in a user turn, and
+ * the request is sent again; otherwise the reply is the text blocks. {@code stop_reason} may be
  * {@code "refusal"}, which we surface as an error instead of an empty reply. Chat replies are
  * short, so effort is set to {@code low} for speed.
  */
@@ -56,25 +59,13 @@ public class ClaudeBackend implements AiBackend {
     }
 
     @Override
-    public CompletableFuture<String> complete(String systemPrompt, List<ChatMessage> history) {
-        JsonObject body = new JsonObject();
-        body.addProperty("model", model);
-        body.addProperty("max_tokens", 2000);
-        body.addProperty("system", systemPrompt);
-
-        if (supportsEffort(model)) {
-            JsonObject outputConfig = new JsonObject();
-            outputConfig.addProperty("effort", "low");
-            body.add("output_config", outputConfig);
-        }
-
+    public CompletableFuture<String> complete(String systemPrompt, List<ChatMessage> history, List<AiTool> tools) {
         // The Messages API requires the conversation to start with a user turn, so drop any
         // assistant turns that ended up at the front of the history window.
         int start = 0;
         while (start < history.size() && !history.get(start).isUser()) {
             start++;
         }
-
         JsonArray messages = new JsonArray();
         for (ChatMessage turn : history.subList(start, history.size())) {
             JsonObject entry = new JsonObject();
@@ -85,8 +76,75 @@ public class ClaudeBackend implements AiBackend {
         if (messages.isEmpty()) {
             return CompletableFuture.failedFuture(new RuntimeException("nothing to send"));
         }
-        body.add("messages", messages);
+        return CompletableFuture.supplyAsync(() -> exchange(systemPrompt, messages, tools), WORKER);
+    }
 
+    /** Sends the conversation, runs whatever tools the model calls, and returns its final text. */
+    private String exchange(String systemPrompt, JsonArray messages, List<AiTool> tools) {
+        for (int round = 0; ; round++) {
+            // On the last round the tools are withheld, so the model has to answer with what it has.
+            boolean offerTools = !tools.isEmpty() && round < MAX_TOOL_ROUNDS;
+            JsonObject json = send(body(systemPrompt, messages, offerTools ? tools : List.of()));
+
+            String stop = json.has("stop_reason") && !json.get("stop_reason").isJsonNull()
+                    ? json.get("stop_reason").getAsString() : "";
+            if ("refusal".equals(stop)) throw new RuntimeException("Claude refused the request");
+
+            JsonArray content = json.getAsJsonArray("content");
+            if (!"tool_use".equals(stop)) return text(content);
+
+            // The assistant turn goes back verbatim — tool_use blocks included — followed by one
+            // user turn carrying a tool_result for each of them, in the same order.
+            JsonObject assistant = new JsonObject();
+            assistant.addProperty("role", "assistant");
+            assistant.add("content", content);
+            messages.add(assistant);
+
+            JsonArray results = new JsonArray();
+            for (JsonElement element : content) {
+                JsonObject block = element.getAsJsonObject();
+                if (!"tool_use".equals(block.get("type").getAsString())) continue;
+                JsonObject input = block.has("input") && block.get("input").isJsonObject()
+                        ? block.getAsJsonObject("input") : new JsonObject();
+                JsonObject result = new JsonObject();
+                result.addProperty("type", "tool_result");
+                result.addProperty("tool_use_id", block.get("id").getAsString());
+                result.addProperty("content", AiBackend.run(tools, block.get("name").getAsString(), input));
+                results.add(result);
+            }
+            JsonObject user = new JsonObject();
+            user.addProperty("role", "user");
+            user.add("content", results);
+            messages.add(user);
+        }
+    }
+
+    private JsonObject body(String systemPrompt, JsonArray messages, List<AiTool> tools) {
+        JsonObject body = new JsonObject();
+        body.addProperty("model", model);
+        body.addProperty("max_tokens", 2000);
+        body.addProperty("system", systemPrompt);
+        if (supportsEffort(model)) {
+            JsonObject outputConfig = new JsonObject();
+            outputConfig.addProperty("effort", "low");
+            body.add("output_config", outputConfig);
+        }
+        if (!tools.isEmpty()) {
+            JsonArray list = new JsonArray();
+            for (AiTool tool : tools) {
+                JsonObject entry = new JsonObject();
+                entry.addProperty("name", tool.name());
+                entry.addProperty("description", tool.description());
+                entry.add("input_schema", tool.schema());
+                list.add(entry);
+            }
+            body.add("tools", list);
+        }
+        body.add("messages", messages);
+        return body;
+    }
+
+    private JsonObject send(JsonObject body) {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("https://api.anthropic.com/v1/messages"))
                 .timeout(Duration.ofSeconds(60))
@@ -95,26 +153,33 @@ public class ClaudeBackend implements AiBackend {
                 .header("anthropic-version", "2023-06-01")
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8))
                 .build();
+        HttpResponse<String> resp;
+        try {
+            resp = HTTP.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("could not reach Claude: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("interrupted", e);
+        }
+        if (resp.statusCode() / 100 != 2) {
+            throw new RuntimeException(explainError(resp.statusCode(), resp.body()));
+        }
+        return JsonParser.parseString(resp.body()).getAsJsonObject();
+    }
 
-        return HTTP.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-                .thenApply(resp -> {
-                    if (resp.statusCode() / 100 != 2) {
-                        throw new RuntimeException(explainError(resp.statusCode(), resp.body()));
-                    }
-                    JsonObject json = JsonParser.parseString(resp.body()).getAsJsonObject();
-                    if (json.has("stop_reason") && !json.get("stop_reason").isJsonNull()
-                            && "refusal".equals(json.get("stop_reason").getAsString())) {
-                        throw new RuntimeException("Claude refused the request");
-                    }
-                    JsonArray content = json.getAsJsonArray("content");
-                    for (var el : content) {
-                        JsonObject block = el.getAsJsonObject();
-                        if ("text".equals(block.get("type").getAsString())) {
-                            return block.get("text").getAsString();
-                        }
-                    }
-                    throw new RuntimeException("Claude returned no text");
-                });
+    /** The reply: every text block, joined. A tool-using turn can split its prose around the calls. */
+    private static String text(JsonArray content) {
+        StringBuilder out = new StringBuilder();
+        for (JsonElement element : content) {
+            JsonObject block = element.getAsJsonObject();
+            if ("text".equals(block.get("type").getAsString())) {
+                if (!out.isEmpty()) out.append(' ');
+                out.append(block.get("text").getAsString());
+            }
+        }
+        if (out.isEmpty()) throw new RuntimeException("Claude returned no text");
+        return out.toString();
     }
 
     /**

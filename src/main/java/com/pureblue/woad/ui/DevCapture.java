@@ -95,6 +95,19 @@ public final class DevCapture {
                 mc.getMainRenderTarget(), 1, message -> {})));
     }
 
+    private static final int GLFW_ESCAPE = 256;
+
+    /** Clicks a settings control of the menu at a fraction of its width, as the mouse would. */
+    private static void clickControl(Minecraft mc, WoadScreen menu, String setting, float across) {
+        float[] b = menu.controlBounds(setting);
+        if (b == null) return;
+        double x = b[0] + b[2] * across;
+        double y = b[1] + b[3] / 2;
+        hover(mc, (float) x, (float) y);
+        menu.mouseClicked(new net.minecraft.client.input.MouseButtonEvent(x, y,
+                new net.minecraft.client.input.MouseButtonInfo(0, 0)), false);
+    }
+
     /** The capture sequences, one per migrated screen. */
     private static void build(String sequence) {
         switch (sequence) {
@@ -310,6 +323,87 @@ public final class DevCapture {
                     jerry.setHudScale(was[2]);
                     jerry.setEnabled(wasEnabled[0]);
                 });
+            }
+            case "aichat" -> {
+                WoadScreen menu = new WoadScreen();
+                open(menu);
+                act(mc -> menu.selectFeature("AI Chat"));
+                grab("aichat_default");
+                // A second prompt dropped into the folder must show up on the next click.
+                java.nio.file.Path extra = com.pureblue.woad.ai.PromptStore.PROMPTS_DIR.resolve("Shot test.txt");
+                act(mc -> {
+                    try {
+                        java.nio.file.Files.writeString(extra, "Answer like a pirate.");
+                    } catch (java.io.IOException e) {
+                        org.slf4j.LoggerFactory.getLogger("Woad").warn("[shot] could not write {}", extra, e);
+                    }
+                    for (var setting : com.pureblue.woad.core.FeatureManager.AI_CHAT.getSettings()) {
+                        if (setting instanceof com.pureblue.woad.core.setting.ModeSetting mode
+                                && mode.getName().equals("Prompt")) {
+                            mode.cycle();
+                            org.slf4j.LoggerFactory.getLogger("Woad").info("[shot] prompts {} -> {}",
+                                    mode.getOptions(), mode.get());
+                        }
+                    }
+                });
+                grab("aichat_cycled");
+                act(mc -> {
+                    for (var setting : com.pureblue.woad.core.FeatureManager.AI_CHAT.getSettings()) {
+                        if (setting instanceof com.pureblue.woad.core.setting.ModeSetting mode
+                                && mode.getName().equals("Prompt")) mode.set("Default");
+                    }
+                    try {
+                        java.nio.file.Files.deleteIfExists(extra);
+                    } catch (java.io.IOException ignored) {
+                        // left behind: harmless
+                    }
+                });
+            }
+            case "pickers" -> {
+                WoadScreen menu = new WoadScreen();
+                var memory = (com.pureblue.woad.core.setting.IntSetting) com.pureblue.woad.core.FeatureManager.AI_CHAT
+                        .getSettings().stream().filter(s -> s.getName().equals("Memory")).findFirst().orElseThrow();
+                int[] memoryWas = new int[1];
+                open(menu);
+                act(mc -> {
+                    menu.selectFeature("AI Chat");
+                    memoryWas[0] = memory.get();
+                });
+                grab("pick_closed");
+                act(mc -> clickControl(mc, menu, "Backend", 0.5f));
+                act(mc -> {
+                    float[] b = menu.controlBounds("Backend");
+                    if (b != null) hover(mc, b[0] + b[2] / 2, b[1] + b[3] + 6 + 14 + 7);
+                });
+                grab("pick_backend_open");
+                act(mc -> menu.keyPressed(new net.minecraft.client.input.KeyEvent(GLFW_ESCAPE, 0, 0)));
+                act(mc -> clickControl(mc, menu, "Prompt", 0.5f));
+                grab("pick_prompt_open");
+                act(mc -> menu.keyPressed(new net.minecraft.client.input.KeyEvent(GLFW_ESCAPE, 0, 0)));
+                act(mc -> menu.mouseScrolled(mc.getWindow().getGuiScaledWidth() / 2.0 + 60,
+                        mc.getWindow().getGuiScaledHeight() / 2.0, 0, -20));
+                act(mc -> {
+                    clickControl(mc, menu, "Memory", 0.3f);
+                    float[] b = menu.controlBounds("Memory");
+                    if (b != null) hover(mc, b[0] + b[2] * 0.3f, b[1] + b[3] / 2);
+                    menu.mouseReleased(new net.minecraft.client.input.MouseButtonEvent(0, 0,
+                            new net.minecraft.client.input.MouseButtonInfo(0, 0)));
+                });
+                grab("pick_slider");
+                act(mc -> {
+                    memory.set(memoryWas[0]);
+                    com.pureblue.woad.config.ConfigStore.save();
+                    mc.setScreen(new net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen(
+                            new net.minecraft.client.gui.screens.TitleScreen()));
+                });
+                act(mc -> {
+                    int w = mc.getWindow().getGuiScaledWidth();
+                    hover(mc, w - 6 - 55, 16);
+                    mc.screen.mouseClicked(new net.minecraft.client.input.MouseButtonEvent(w - 6 - 55, 16,
+                            new net.minecraft.client.input.MouseButtonInfo(0, 0)), false);
+                });
+                act(mc -> hover(mc, mc.getWindow().getGuiScaledWidth() - 6 - 55, 26 + 6 + 7));
+                grab("pick_net");
             }
             default -> grab("unknown_sequence");
         }

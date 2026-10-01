@@ -5,7 +5,12 @@ import com.google.gson.JsonPrimitive;
 
 import java.util.List;
 
-/** A setting that cycles through a fixed list of options when clicked. */
+/**
+ * A setting that cycles through a list of options when clicked.
+ *
+ * <p>The list is fixed unless a subclass overrides {@link #getOptions()} — the AI prompt picker
+ * does, to offer whatever files are in the prompt folder right now.
+ */
 public class ModeSetting extends Setting<String> {
 
     private final List<String> options;
@@ -21,6 +26,8 @@ public class ModeSetting extends Setting<String> {
 
     /** Advances to the next option, wrapping around. */
     public void cycle() {
+        List<String> options = getOptions();
+        if (options.isEmpty()) return;
         int index = options.indexOf(get());
         set(options.get((index + 1) % options.size()));
     }
@@ -36,7 +43,7 @@ public class ModeSetting extends Setting<String> {
 
     @Override
     public void read(JsonElement element) {
-        if (element != null && element.isJsonPrimitive() && options.contains(element.getAsString())) {
+        if (element != null && element.isJsonPrimitive() && getOptions().contains(element.getAsString())) {
             set(element.getAsString());
         }
     }

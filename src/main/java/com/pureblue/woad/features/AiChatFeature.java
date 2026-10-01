@@ -1,12 +1,16 @@
 package com.pureblue.woad.features;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.pureblue.woad.ai.AiBackend;
+import com.pureblue.woad.ai.AiTool;
 import com.pureblue.woad.ai.ChatMessage;
 import com.pureblue.woad.ai.ClaudeBackend;
 import com.pureblue.woad.ai.OllamaBackend;
 import com.pureblue.woad.ai.OpenAiBackend;
 import com.pureblue.woad.ai.PriceLookup;
 import com.pureblue.woad.ai.PromptStore;
+import com.pureblue.woad.ai.SkyblockTools;
 import com.pureblue.woad.core.Feature;
 import com.pureblue.woad.core.setting.BooleanSetting;
 import com.pureblue.woad.core.setting.IntSetting;
@@ -36,10 +40,15 @@ import net.minecraft.client.multiplayer.ClientPacketListener;
  *
  * <p>It listens only to the channels enabled in the settings (party / guild / all chat), replies in
  * the same channel the question came from, and is told by its system prompt to answer in English
- * and to keep answers short. It can run a small allow-list of party commands
- * (invite, kick, warp, ...) when a player asks for one — never arbitrary commands.
+ * and to keep answers short.
  *
- * <p>Backends: a local Ollama model, or an API key (Claude / OpenAI).
+ * <p>The model is given tools: it looks prices up on Coflnet itself and runs party commands from a
+ * small allow-list (invite, kick, warp, ...) — never arbitrary commands. Understanding the question
+ * is its job, so players can ask in their own words. A model that cannot use tools falls back to
+ * the mod's own keyword matching.
+ *
+ * <p>Backends: a local Ollama model, or an API key (Claude / OpenAI). The system prompt is picked
+ * from the text files in {@code config/woad/ai_prompts/}.
  */
 public class AiChatFeature extends Feature {
 
@@ -81,6 +90,9 @@ public class AiChatFeature extends Feature {
 
     /** Minecraft names are 3-16 word characters. */
     private static final Pattern NAME_TOKEN = Pattern.compile("[A-Za-z0-9_]{3,16}");
+
+    /** What the party tool accepts as a player name: a whole Minecraft name and nothing else. */
+    private static final Pattern PLAYER_NAME = Pattern.compile("[A-Za-z0-9_]{1,16}");
 
     /**
      * A question about a word rather than a request to act ("what does invite mean") — those go to
@@ -124,6 +136,26 @@ public class AiChatFeature extends Feature {
     private final StringSetting trigger = addSetting(new StringSetting("Trigger",
             "Word after \"!\" that calls the AI. \"ai\" means players write !ai <question>.", "ai"));
 
+    /**
+     * Which prompt file is used. The choices are read from the folder each time, so a file dropped
+     * in shows up on the next click without a restart.
+     */
+    private final ModeSetting prompt = addSetting(new ModeSetting("Prompt",
+            "Which prompt the AI follows. Every .txt file in config/woad/ai_prompts is one prompt: "
+                    + "add your own there, then pick it here.",
+            PromptStore.DEFAULT_PROMPT, List.of(PromptStore.DEFAULT_PROMPT)) {
+        @Override
+        public List<String> getOptions() {
+            return PromptStore.promptNames(AiChatFeature::defaultPrompt);
+        }
+
+        @Override
+        public void read(JsonElement element) {
+            // Kept even if the file is gone for now: loadPrompt falls back to Default meanwhile.
+            if (element != null && element.isJsonPrimitive()) set(element.getAsString());
+        }
+    });
+
     private final StringSetting ollamaUrl = addSetting(new StringSetting("Ollama URL",
             "Address of your local Ollama server.", "http://localhost:11434"));
 
@@ -160,16 +192,17 @@ public class AiChatFeature extends Feature {
                     + "Handy for testing.", true));
 
     private final BooleanSetting allowCommands = addSetting(new BooleanSetting("Allow commands",
-            "Let the AI run party commands (invite, kick, warp) when a player asks.", true));
+            "Let the AI run party commands (invite, kick, transfer, promote, warp) when a player "
+                    + "asks, however it is worded.", true));
 
     private final BooleanSetting priceLookup = addSetting(new BooleanSetting("Auction prices",
-            "Answer price questions from Coflnet's live auction data instead of asking the AI. "
-                    + "Understands filters too: \"cheapest hyperion with wither impact\".", true));
+            "Let the AI check Coflnet itself: auction and bazaar prices with any filter, recent "
+                    + "sales, price history. Ask in your own words.", true));
 
     private final IntSetting memory = addSetting(new IntSetting("Memory",
             "How many recent chat messages the AI remembers, so a conversation can span several "
                     + "messages. Higher means better memory but slower answers. 0 disables it.",
-            100, 0, 500));
+            100, 0, 500).slider(5, value -> value == 0 ? "Off" : Integer.toString(value)));
 
     private long lastReplyAt = 0L;
     /** Our own last answer — public chat echoes it back to us, and answering it would loop. */
@@ -182,7 +215,10 @@ public class AiChatFeature extends Feature {
      */
     private final Deque<ChatMessage> history = new ArrayDeque<>();
 
-    /** A line waiting to be sent, with the command that carries it ({@code null} for plain chat). */
+    /**
+     * A line waiting to be sent: {@code command} carries {@code text} ({@code null} command for
+     * plain chat), or is sent alone when {@code text} is {@code null} — a party command.
+     */
     private record Outgoing(String command, String text) {}
 
     /** Lines waiting their turn, so two never leave the client in the same tick. */
@@ -201,6 +237,12 @@ public class AiChatFeature extends Feature {
 
     /** Beyond this many waiting questions it is a flood, not a conversation. */
     private static final int MAX_PENDING = 5;
+
+    /**
+     * The backend and model last found unable to use tools, so the next questions skip straight to
+     * answering without them instead of being refused once each.
+     */
+    private String noToolsModel = "";
 
     public AiChatFeature() {
         super("ai_chat", "AI Chat",
@@ -296,17 +338,30 @@ public class AiChatFeature extends Feature {
         answerNow(inbox.poll());
     }
 
-    /** Runs one question: a party command, a price lookup, or the model. */
+    /** Runs one question: the model, with the tools the settings allow. */
     private void answerNow(Pending pending) {
+        // The question we are about to answer was itself a /pc, /gc or /msg command from this
+        // account when the local player asked it, so our reply must not follow it immediately.
+        if (usesCommand(pending.channel()) && isLocalPlayer(pending.sender())) deferSending();
+
+        List<AiTool> tools = tools();
+        if (tools.isEmpty() || modelKey().equals(noToolsModel)) {
+            answerWithoutTools(pending);
+            return;
+        }
+        askModel(pending, tools, false);
+    }
+
+    /**
+     * The old way, for models that cannot call tools: party requests and price questions are
+     * recognised by keywords and answered by the mod; everything else goes to the model.
+     */
+    private void answerWithoutTools(Pending pending) {
         String sender = pending.sender();
         String question = pending.question();
 
-        // The question we are about to answer was itself a /pc, /gc or /msg command from this
-        // account when the local player asked it, so our reply must not follow it immediately.
-        if (usesCommand(pending.channel()) && isLocalPlayer(sender)) deferSending();
-
-        // Party management is handled here, not by the model: small models keep answering "I can't
-        // run commands" however the prompt is written. This is also instant and costs no tokens.
+        // Small models keep answering "I can't run commands" however the prompt is written, so the
+        // request is recognised here. Instant, and costs no tokens.
         if (allowCommands.enabled()) {
             String direct = commandFor(question);
             if (direct != null) {
@@ -320,24 +375,28 @@ public class AiChatFeature extends Feature {
         // Auction prices come from Coflnet, not from the model: it cannot know today's market and
         // would happily invent a number. Falls through to the model when nothing matches.
         if (priceLookup.enabled() && PriceLookup.isPriceQuestion(question)) {
-            CompletableFuture.supplyAsync(() -> PriceLookup.answer(question))
+            CompletableFuture.supplyAsync(() -> PriceLookup.answer(question), AiBackend.WORKER)
                     .thenAccept(line -> Minecraft.getInstance().execute(() -> {
                         if (line != null) sendReply(pending, line);
-                        else askModel(pending);
+                        else askModel(pending, List.of(), true);
                     }))
                     .exceptionally(error -> {
                         LOGGER.warn("[AI] price lookup failed", error);
-                        Minecraft.getInstance().execute(() -> askModel(pending));
+                        Minecraft.getInstance().execute(() -> askModel(pending, List.of(), true));
                         return null;
                     });
             return;
         }
 
-        askModel(pending);
+        askModel(pending, List.of(), true);
     }
 
-    /** Sends the conversation to the configured backend and answers with what comes back. */
-    private void askModel(Pending pending) {
+    /**
+     * Sends the conversation to the configured backend and answers with what comes back.
+     *
+     * @param legacy the model was not given tools and may ask for a command in its text instead
+     */
+    private void askModel(Pending pending, List<AiTool> tools, boolean legacy) {
         AiBackend ai = buildBackend();
         if (ai == null) {
             sendModMessage(Component.literal("AI is not configured (missing API key).").withStyle(ChatFormatting.RED));
@@ -345,13 +404,23 @@ public class AiChatFeature extends Feature {
         }
 
         List<ChatMessage> conversation = new ArrayList<>(history);
-        LOGGER.info("[AI] {} asked in {}: {} ({} remembered)",
-                pending.sender(), pending.channel().label, pending.question(), conversation.size());
+        LOGGER.info("[AI] {} asked in {}: {} ({} remembered, {} tools)",
+                pending.sender(), pending.channel().label, pending.question(), conversation.size(), tools.size());
 
-        ai.complete(systemPrompt(), conversation)
+        ai.complete(systemPrompt(tools), conversation, tools)
                 .thenAccept(reply -> Minecraft.getInstance()
-                        .execute(() -> handleReply(pending, reply)))
+                        .execute(() -> handleReply(pending, reply, legacy)))
                 .exceptionally(error -> {
+                    Throwable cause = rootCause(error);
+                    if (cause instanceof AiBackend.ToolsUnsupportedException) {
+                        // Remembered, so the following questions do not each pay a refused request.
+                        LOGGER.info("[AI] {}, answering without tools", cause.getMessage());
+                        Minecraft.getInstance().execute(() -> {
+                            noToolsModel = modelKey();
+                            answerWithoutTools(pending);
+                        });
+                        return null;
+                    }
                     LOGGER.warn("[AI] request failed", error);
                     Minecraft.getInstance().execute(() -> sendModMessage(
                             Component.literal("AI request failed: " + rootMessage(error)).withStyle(ChatFormatting.RED)));
@@ -360,11 +429,13 @@ public class AiChatFeature extends Feature {
     }
 
     /** Runs any requested command, then sends the remaining text back where the question came from. */
-    private void handleReply(Pending pending, String rawReply) {
+    private void handleReply(Pending pending, String rawReply, boolean legacy) {
         String reply = rawReply == null ? "" : rawReply.trim();
 
+        // With tools the model runs commands by calling them; text that merely looks like a
+        // directive is just text.
         Matcher directive = COMMAND_DIRECTIVE.matcher(reply);
-        if (directive.find()) {
+        if (legacy && directive.find()) {
             String action = directive.group(1).toLowerCase(Locale.ROOT);
             boolean needsName = !action.equals("warp");
             if (allowCommands.enabled()) {
@@ -438,7 +509,10 @@ public class AiChatFeature extends Feature {
         if (network == null) return; // not connected yet: hold the line until we are
 
         Outgoing out = outbox.poll();
-        if (out.command() == null) {
+        if (out.text() == null) {
+            LOGGER.info("[AI] running /{}", out.command());
+            network.sendCommand(out.command()); // a party command the AI asked for
+        } else if (out.command() == null) {
             network.sendChat(out.text()); // singleplayer / vanilla: plain chat, no /ac
         } else {
             network.sendCommand(out.command() + " " + out.text());
@@ -453,10 +527,13 @@ public class AiChatFeature extends Feature {
 
     // ---- Commands --------------------------------------------------------------------------
 
-    /** Only these commands can ever be run by the AI. */
-    private void runAllowedCommand(String action, String argument) {
+    /**
+     * The command line for an allowed party action, or {@code null}. Only these commands can ever
+     * be run by the AI.
+     */
+    private static String partyCommand(String action, String argument) {
         String safeArg = argument == null ? "" : argument.trim();
-        String command = switch (action.toLowerCase(Locale.ROOT)) {
+        return switch (action.toLowerCase(Locale.ROOT)) {
             case "invite", "party_invite" -> safeArg.isEmpty() ? null : "p invite " + safeArg;
             case "kick", "party_kick" -> safeArg.isEmpty() ? null : "p kick " + safeArg;
             case "transfer", "party_transfer" -> safeArg.isEmpty() ? null : "p transfer " + safeArg;
@@ -464,6 +541,11 @@ public class AiChatFeature extends Feature {
             case "warp", "party_warp" -> "p warp";
             default -> null;
         };
+    }
+
+    private void runAllowedCommand(String action, String argument) {
+        String safeArg = argument == null ? "" : argument.trim();
+        String command = partyCommand(action, safeArg);
         if (command == null) {
             LOGGER.info("[AI] ignored command directive: {} {}", action, safeArg);
             return;
@@ -542,6 +624,51 @@ public class AiChatFeature extends Feature {
         }
     }
 
+    // ---- Tools -----------------------------------------------------------------------------
+
+    /** What the model may call for this question, as the settings allow. */
+    private List<AiTool> tools() {
+        List<AiTool> tools = new ArrayList<>();
+        if (allowCommands.enabled()) tools.add(partyTool());
+        if (priceLookup.enabled()) tools.addAll(SkyblockTools.all());
+        return tools;
+    }
+
+    /**
+     * Runs a party command for the model. The command goes through the outbox like any line we
+     * send, so two of them asked in one go are spaced out instead of the second being dropped.
+     */
+    private AiTool partyTool() {
+        JsonObject schema = AiTool.newSchema();
+        AiTool.choice(schema, "action", "The party action.", "invite", "kick", "transfer", "promote", "warp");
+        AiTool.prop(schema, "player", "string",
+                "Exact Minecraft name of the player, copied from the chat. Not needed for warp.");
+        AiTool.require(schema, "action");
+        return new AiTool("party_command",
+                "Runs a Hypixel party command from this account: invite a player, kick them, transfer "
+                        + "the party to them, promote them, or warp the party to you. Use it only when the "
+                        + "last message asks for it, once per player.",
+                schema, args -> {
+                    String action = AiTool.string(args, "action").toLowerCase(Locale.ROOT);
+                    String player = AiTool.string(args, "player");
+                    if (!action.equals("warp") && !PLAYER_NAME.matcher(player).matches()) {
+                        return "Error: give the exact Minecraft name (letters, digits or _, up to 16).";
+                    }
+                    String command = partyCommand(action, action.equals("warp") ? "" : player);
+                    if (command == null) return "Error: unknown action " + action;
+                    Minecraft.getInstance().execute(() -> outbox.add(new Outgoing(command, null)));
+                    return "Done: /" + command;
+                });
+    }
+
+    /** Identifies the model in use, to remember which one cannot use tools. */
+    private String modelKey() {
+        return switch (backend.get()) {
+            case "Ollama" -> "Ollama:" + ollamaUrl.get().trim() + ":" + ollamaModel.get().trim();
+            default -> backend.get() + ":" + apiModel.get().trim();
+        };
+    }
+
     /** Adds one turn to the window, dropping the oldest once it is full. */
     private void remember(ChatMessage turn) {
         int limit = memory.get();
@@ -569,22 +696,29 @@ public class AiChatFeature extends Feature {
     // ---- Prompt controls in the menu --------------------------------------------------------
 
     private final UiButton editPromptButton = new UiButton("Edit prompt", UiButton.Variant.SECONDARY, () -> {
-        openPrompt();
-        sendModMessage(Component.literal("Prompt file opened. Save it, the next question uses it.")
+        PromptStore.openPrompt(prompt.get(), AiChatFeature::defaultPrompt);
+        sendModMessage(Component.literal("Prompt \"" + prompt.get() + "\" opened. Save it, the next question uses it.")
+                .withStyle(ChatFormatting.GRAY));
+    });
+    private final UiButton folderButton = new UiButton("Prompt folder", UiButton.Variant.SECONDARY, () -> {
+        PromptStore.openPromptFolder(AiChatFeature::defaultPrompt);
+        sendModMessage(Component.literal("Each .txt file here is a prompt. Pick it in the Prompt setting.")
                 .withStyle(ChatFormatting.GRAY));
     });
     private final UiButton resetPromptButton = new UiButton("Reset", UiButton.Variant.GHOST, () -> {
         resetPrompt();
-        sendModMessage(Component.literal("Prompt reset to the built-in one.").withStyle(ChatFormatting.GRAY));
+        sendModMessage(Component.literal("Default prompt restored to the built-in one.").withStyle(ChatFormatting.GRAY));
     });
 
     @Override
     public void renderExtra(net.minecraft.client.gui.GuiGraphicsExtractor ctx,
                             net.minecraft.client.gui.screens.Screen parent,
                             int left, int y, int right, int mouseX, int mouseY) {
-        editPromptButton.bounds(left, y, editPromptButton.preferredWidth(), Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
-        resetPromptButton.bounds(left + editPromptButton.width() + 4, y, resetPromptButton.preferredWidth(),
-                Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
+        int x = left;
+        for (UiButton button : List.of(editPromptButton, folderButton, resetPromptButton)) {
+            button.bounds(x, y, button.preferredWidth(), Theme.BUTTON_H_SMALL).render(ctx, mouseX, mouseY);
+            x += button.width() + 4;
+        }
     }
 
     @Override
@@ -595,18 +729,22 @@ public class AiChatFeature extends Feature {
     @Override
     public boolean extraMouseClicked(net.minecraft.client.gui.screens.Screen parent,
                                      double mx, double my, int button) {
-        return editPromptButton.mouseClicked(mx, my, button) || resetPromptButton.mouseClicked(mx, my, button);
+        return editPromptButton.mouseClicked(mx, my, button) || folderButton.mouseClicked(mx, my, button)
+                || resetPromptButton.mouseClicked(mx, my, button);
     }
 
     // ---- Prompt ----------------------------------------------------------------------------
 
     /**
-     * The prompt actually sent: the (editable) file from the config folder, with its placeholders
-     * filled in — {@code {trigger}} becomes the current trigger word, and the {@code [COMMANDS]}
-     * block is kept only while "Allow commands" is on.
+     * The prompt actually sent: the prompt file picked in the settings, with its placeholders filled
+     * in — {@code {trigger}} becomes the current trigger word, and the {@code [COMMANDS]} block is
+     * kept only while "Allow commands" is on — followed by how to use the tools on offer.
+     *
+     * <p>The tool part is added here rather than written in the file, so every prompt a player
+     * writes works with the tools without having to describe them.
      */
-    private String systemPrompt() {
-        String text = PromptStore.load(PromptStore.AI_CHAT, AiChatFeature::defaultPrompt);
+    private String systemPrompt(List<AiTool> tools) {
+        String text = PromptStore.loadPrompt(prompt.get(), AiChatFeature::defaultPrompt);
         if (allowCommands.enabled()) {
             text = text.replace(COMMANDS_OPEN + "\n", "").replace(COMMANDS_CLOSE + "\n", "")
                        .replace(COMMANDS_OPEN, "").replace(COMMANDS_CLOSE, "");
@@ -617,32 +755,62 @@ public class AiChatFeature extends Feature {
                 text = text.substring(0, start) + text.substring(end + COMMANDS_CLOSE.length());
             }
         }
-        return text.replace("{trigger}", "!" + trigger.get().trim()).trim();
+        text = text.replace("{trigger}", "!" + trigger.get().trim()).trim();
+        return tools.isEmpty() ? text : text + "\n\n" + toolGuide(tools);
     }
 
-    /** Restores the shipped prompt, overwriting whatever is in the config folder. */
+    /** How to use the tools, for whichever of them are on offer. */
+    private static String toolGuide(List<AiTool> tools) {
+        boolean party = AiBackend.find(tools, "party_command") != null;
+        boolean market = AiBackend.find(tools, "find_item") != null;
+        StringBuilder guide = new StringBuilder("""
+                TOOLS
+                - You have tools. Use them instead of guessing. They override anything above saying
+                  you cannot check prices or run commands.
+                - The player may write in any language or slang: work out what they mean, and give
+                  the tools English item names.
+                """);
+        if (market) {
+            guide.append("""
+                    - Prices and market questions (auction house, bazaar, past sales, price history,
+                      recipes): always use the tools, never a number from memory. Usual path: find_item,
+                      then quick_price; for specific attributes get_item_filters then search_auctions;
+                      get_bazaar_price for bazaar items; coflnet_api for anything else.
+                    - Quote prices short, like 494.5M. Name the seller only if asked. You may end with
+                      "/viewauction <auction id>" so players can open the listing.
+                    - If a tool finds nothing, say so in a few words. Do not invent.
+                    """);
+        }
+        if (party) {
+            guide.append("""
+                    - Party actions (invite, kick, transfer, promote, warp): call party_command only
+                      when the last message asks for one, then confirm in a few words, e.g. "Invited Notch".
+                    """);
+        }
+        guide.append("- Your final answer is still one short line.");
+        return guide.toString();
+    }
+
+    /** Restores the shipped Default prompt, overwriting the player's edits of it. */
     public void resetPrompt() {
-        PromptStore.write(PromptStore.AI_CHAT, defaultPrompt());
-    }
-
-    /** Opens the prompt file in the system's text editor. */
-    public void openPrompt() {
-        PromptStore.open(PromptStore.AI_CHAT, AiChatFeature::defaultPrompt);
+        PromptStore.resetDefaultPrompt(AiChatFeature::defaultPrompt);
     }
 
     /**
      * The shipped prompt: an output contract, the language rule, how to read a busy chat, and a few
      * worked examples.
      *
-     * <p>It deliberately says nothing about party commands. Those are recognised and run by
-     * {@link #commandFor} before the model is ever called, so telling it about them would only
-     * invite it to argue about whether it can — which is exactly what small models do.
+     * <p>It says nothing about tools: {@link #toolGuide} is appended to whichever prompt is picked,
+     * so a player's own prompts get the same instructions without having to write them.
      */
     private static String defaultPrompt() {
         return """
                 # Woad - AI Chat prompt.
+                # Every .txt file in this folder is a prompt: copy this one, rename it, edit it,
+                # then pick it in the menu (AI Chat > Prompt).
                 # Lines starting with # are comments and are NOT sent to the AI.
                 # {trigger} is replaced by the trigger word from the settings (e.g. !ai).
+                # How to use the tools (prices, party commands) is added by the mod: no need to write it.
                 # Delete this file, or press Reset in the menu, to get this original prompt back.
 
                 You are a player's assistant in the chat of the Minecraft server Hypixel.
@@ -673,8 +841,7 @@ public class AiChatFeature extends Feature {
                 - Something you cannot know: say so plainly instead of inventing it.
                   "{trigger} what is my stuff worth" -> "No idea, I cannot see your inventory."
                 - Unsure of a game detail? Say you are not sure rather than stating it as fact.
-                - NEVER state an auction price or name a seller. You cannot see the auction house;
-                  the mod answers those itself. Say "I cannot check the auction house" instead.
+                - NEVER invent a price or a seller. Check with your tools; if you cannot, say so.
 
                 PLAYER NAMES
                 - Names are identifiers. Copy them exactly, including odd or rude-looking ones.
@@ -732,6 +899,12 @@ public class AiChatFeature extends Feature {
     /** True when the message came from this client's own player. */
     private static boolean isLocalPlayer(String sender) {
         return Minecraft.getInstance().getUser().getName().equalsIgnoreCase(sender);
+    }
+
+    private static Throwable rootCause(Throwable error) {
+        Throwable cause = error;
+        while (cause.getCause() != null) cause = cause.getCause();
+        return cause;
     }
 
     private static String rootMessage(Throwable error) {

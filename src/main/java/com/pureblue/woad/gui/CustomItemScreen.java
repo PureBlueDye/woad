@@ -12,7 +12,7 @@ import com.pureblue.woad.ui.UiScreen;
 import com.pureblue.woad.ui.UiText;
 import com.pureblue.woad.ui.UiTextField;
 import com.pureblue.woad.ui.UiToggle;
-import com.pureblue.woad.ui.UiValueButton;
+import com.pureblue.woad.ui.UiDropdown;
 import com.pureblue.woad.ui.UiWidget;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -105,7 +105,7 @@ public class CustomItemScreen extends UiScreen {
     private final UiTextField nameField;
     private final UiTextField idField;
     private final UiTextField dyeField;
-    private final UiValueButton glint;
+    private final UiDropdown glint;
     private final UiToggle rgb;
     private final HelpBadge help = new HelpBadge();
     private final UiButton reset;
@@ -130,11 +130,11 @@ public class CustomItemScreen extends UiScreen {
         dyeField = add(new UiTextField(draft.leatherColor == CustomItem.NO_COLOR ? "" : hex(draft.leatherColor), 7));
         dyeField.box().setResponder(this::readDye);
 
-        glint = add(new UiValueButton(UiValueButton.Kind.CYCLE,
-                () -> draft.glint.name().toLowerCase(Locale.ROOT), () -> {
-                    CustomItem.Glint[] values = CustomItem.Glint.values();
-                    draft.glint = values[(draft.glint.ordinal() + 1) % values.length];
-                }));
+        glint = add(new UiDropdown(
+                () -> java.util.Arrays.stream(CustomItem.Glint.values()).map(Enum::name).toList(),
+                () -> draft.glint.name(),
+                value -> draft.glint = CustomItem.Glint.valueOf(value))
+                .label(value -> value.charAt(0) + value.substring(1).toLowerCase(Locale.ROOT)));
         rgb = add(new UiToggle(() -> draft.rgb, on -> {
             draft.rgb = on;
             if (on) {

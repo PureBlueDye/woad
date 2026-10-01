@@ -12,6 +12,7 @@ import com.pureblue.woad.gui.WoadScreen;
 import com.pureblue.woad.net.NetworkChoice;
 import com.pureblue.woad.ui.DevCapture;
 import com.pureblue.woad.ui.UiGalleryScreen;
+import com.pureblue.woad.ui.UiDropdown;
 import com.pureblue.woad.ui.UiVanillaButton;
 import java.util.ArrayList;
 import java.util.List;
@@ -32,7 +33,7 @@ import net.fabricmc.fabric.api.client.screen.v1.ScreenMouseEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.ChatScreen;
-import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
@@ -117,7 +118,7 @@ public class WoadClient implements ClientModInitializer {
             // Network adapter picker, top-right of the server list. Deliberately not in the
             // config menu: it belongs where you are about to connect.
             if (screen instanceof JoinMultiplayerScreen) {
-                Screens.getWidgets(screen).add(buildAdapterButton(sw));
+                addAdapterPicker(screen, sw);
             }
             if (screen instanceof InventoryScreen) {
                 ScreenMouseEvents.allowMouseClick(screen).register((scr, click) ->
@@ -162,13 +163,48 @@ public class WoadClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
     }
 
-    /** The adapter button: shows the current choice, and cycles through the adapters on click. */
-    private static Button buildAdapterButton(int screenWidth) {
+    /**
+     * The adapter button: shows the current choice, and a click unfolds the list of adapters right
+     * under it. The vanilla screen knows nothing of the list, so it is drawn after the screen and
+     * gets the clicks, wheel and Escape before the screen does while it is open.
+     */
+    private static void addAdapterPicker(Screen screen, int screenWidth) {
         int width = 110;
-        return new UiVanillaButton(screenWidth - width - 6, 6, width, 20, adapterLabel(), b -> {
-            NetworkChoice.cycle();
-            b.setMessage(adapterLabel());
-        }).tooltip(WoadClient::adapterTooltip);
+        UiVanillaButton[] button = new UiVanillaButton[1];
+        UiDropdown picker = new UiDropdown(
+                () -> NetworkChoice.options().stream().map(NetworkChoice.Option::id).toList(),
+                () -> NetworkChoice.current().id(),
+                id -> {
+                    NetworkChoice.select(id);
+                    button[0].setMessage(adapterLabel());
+                })
+                .label(WoadClient::adapterName);
+        button[0] = new UiVanillaButton(screenWidth - width - 6, 6, width, 20, adapterLabel(), b -> picker.toggle())
+                .tooltip(() -> picker.isOpen() ? List.of() : adapterTooltip());
+        picker.bounds(button[0].getX(), button[0].getY(), width, 20);
+        Screens.getWidgets(screen).add(button[0]);
+
+        ScreenEvents.afterExtract(screen).register((scr, ctx, mx, my, delta) ->
+                picker.renderList(ctx, mx, my, scr.width, scr.height));
+        ScreenMouseEvents.allowMouseClick(screen).register((scr, click) ->
+                !picker.listMouseClicked(click.x(), click.y(), click.button()));
+        ScreenMouseEvents.allowMouseScroll(screen).register((scr, mx, my, horizontal, vertical) ->
+                !picker.listMouseScrolled(mx, my, vertical));
+        ScreenKeyboardEvents.allowKeyPress(screen).register((scr, key) -> {
+            if (picker.isOpen() && key.key() == GLFW.GLFW_KEY_ESCAPE) {
+                picker.close();
+                return false;
+            }
+            return true;
+        });
+    }
+
+    /** An adapter's short, address-free name, for the list. */
+    private static String adapterName(String id) {
+        for (NetworkChoice.Option option : NetworkChoice.options()) {
+            if (option.id().equals(id)) return option.label();
+        }
+        return id.isEmpty() ? "Automatic" : id;
     }
 
     /** Never the address: this button is visible on stream and in screen shares. */
@@ -186,7 +222,7 @@ public class WoadClient implements ClientModInitializer {
             lines.add(current.fullName());
             lines.add(current.address().getHostAddress());
         }
-        lines.add("Click to switch connection.");
+        lines.add("Click to pick a connection.");
         lines.add("Applies to joining servers and pings, not to login.");
         return lines;
     }

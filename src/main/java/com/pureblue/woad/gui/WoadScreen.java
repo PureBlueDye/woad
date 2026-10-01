@@ -14,6 +14,8 @@ import com.pureblue.woad.ui.Anim;
 import com.pureblue.woad.ui.Draw;
 import com.pureblue.woad.ui.Theme;
 import com.pureblue.woad.ui.UiButton;
+import com.pureblue.woad.ui.UiDropdown;
+import com.pureblue.woad.ui.UiValueSlider;
 import com.pureblue.woad.ui.UiPanel;
 import com.pureblue.woad.ui.UiScreen;
 import com.pureblue.woad.ui.UiScroll;
@@ -68,6 +70,8 @@ public class WoadScreen extends UiScreen {
     private float viewBottom;
     private UiToggle shownMaster;
     private UiButton shownOpen;
+    /** The control a press started on, which gets the drag and the release (sliders). */
+    private UiWidget dragging;
 
     public WoadScreen() {
         super(Component.literal(Woad.NAME));
@@ -85,6 +89,20 @@ public class WoadScreen extends UiScreen {
                 return;
             }
         }
+    }
+
+    /**
+     * Where a setting's control of the selected feature was last drawn, as {x, y, w, h}, or
+     * {@code null}. Used by development captures to click real controls.
+     */
+    public float[] controlBounds(String settingName) {
+        for (Map.Entry<Setting<?>, UiWidget> entry : controls.entrySet()) {
+            if (entry.getKey().getName().equals(settingName) && visibleControls.contains(entry.getValue())) {
+                UiWidget c = entry.getValue();
+                return new float[]{c.x(), c.y(), c.width(), c.height()};
+            }
+        }
+        return null;
     }
 
     // ---- Drawing ---------------------------------------------------------------------------------
@@ -226,18 +244,44 @@ public class WoadScreen extends UiScreen {
             }
             control.render(ctx, mouseX, mouseY);
             if (y + rowH > top && y < bottom) visibleControls.add(control);
+            // A list whose button has scrolled out of view would float detached from it.
+            if (control instanceof UiDropdown dropdown
+                    && (control.y() < top || control.y() + controlH > bottom)) dropdown.close();
 
             y += rowH;
             if (i < settings.size() - 1) UiPanel.hairline(ctx, cx, right - PAD, y);
         }
         Draw.popAlpha(fadePrevious);
         scroll.end(ctx, y + offset - top + 4, mouseX, mouseY);
+
+        // Drawn last and outside the scroll area's clipping, so the list lies over the rows below.
+        for (Setting<?> setting : settings) {
+            if (controls.get(setting) instanceof UiDropdown dropdown) {
+                dropdown.renderList(ctx, mouseX, mouseY, this.width, this.height);
+            }
+        }
+    }
+
+    /** The settings dropdown whose list is unfolded, if any. Only one is open at a time. */
+    private UiDropdown settingsDropdown() {
+        for (UiWidget control : controls.values()) {
+            if (control instanceof UiDropdown dropdown && dropdown.isOpen()) return dropdown;
+        }
+        return null;
+    }
+
+    private void closeDropdowns() {
+        for (UiWidget control : controls.values()) {
+            if (control instanceof UiDropdown dropdown) dropdown.close();
+        }
     }
 
     private float controlWidth(Setting<?> setting, UiWidget control) {
         if (setting instanceof BooleanSetting) return Theme.SWITCH_W;
         if (control instanceof MutedWhenEmpty text) return text.preferredWidth(58, 110);
         if (setting instanceof KeybindSetting) return ((UiValueButton) control).preferredWidth(44, 80);
+        if (control instanceof UiDropdown dropdown) return dropdown.preferredWidth(58, 110);
+        if (control instanceof UiValueSlider) return 110;
         return ((UiValueButton) control).preferredWidth(58, 110);
     }
 
@@ -251,10 +295,14 @@ public class WoadScreen extends UiScreen {
                 });
             }
             if (s instanceof ModeSetting mode) {
-                return new UiValueButton(UiValueButton.Kind.CYCLE, mode::get, () -> {
-                    mode.cycle();
+                return new UiDropdown(mode::getOptions, mode::get, value -> {
+                    mode.set(value);
                     ConfigStore.save();
                 });
+            }
+            if (s instanceof IntSetting number && number.isSlider()) {
+                return new UiValueSlider(number.min(), number.max(), number.sliderStep(), number::get,
+                        number::set, number::sliderLabel, ConfigStore::save);
             }
             if (s instanceof IntSetting number) {
                 return new UiValueButton(UiValueButton.Kind.EDIT, () -> String.valueOf(number.get()), () -> {
@@ -296,6 +344,10 @@ public class WoadScreen extends UiScreen {
         double my = click.y();
         int button = click.button();
 
+        // An unfolded list takes the click first: a pick, or a click elsewhere that only closes it.
+        UiDropdown unfolded = settingsDropdown();
+        if (unfolded != null && unfolded.listMouseClicked(mx, my, button)) return true;
+
         if (close.mouseClicked(mx, my, button)) return true;
         for (SideRow row : sideRows) {
             if (row.mouseClicked(mx, my, button)) return true;
@@ -312,7 +364,10 @@ public class WoadScreen extends UiScreen {
             } else if (my >= viewTop && my < viewBottom) {
                 if (scroll.mouseClicked(mx, my, button)) return true;
                 for (UiWidget control : visibleControls) {
-                    if (control.mouseClicked(mx, my, button)) return true;
+                    if (control.mouseClicked(mx, my, button)) {
+                        dragging = control; // a slider keeps following the pointer from here
+                        return true;
+                    }
                 }
             }
         }
@@ -322,17 +377,24 @@ public class WoadScreen extends UiScreen {
     @Override
     public boolean mouseDragged(MouseButtonEvent click, double dx, double dy) {
         if (scroll.mouseDragged(click.x(), click.y(), click.button())) return true;
+        if (dragging != null && dragging.mouseDragged(click.x(), click.y(), click.button())) return true;
         return super.mouseDragged(click, dx, dy);
     }
 
     @Override
     public boolean mouseReleased(MouseButtonEvent click) {
         scroll.mouseReleased(click.x(), click.y(), click.button());
+        if (dragging != null) {
+            dragging.mouseReleased(click.x(), click.y(), click.button());
+            dragging = null;
+        }
         return super.mouseReleased(click);
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double horizontal, double vertical) {
+        UiDropdown unfolded = settingsDropdown();
+        if (unfolded != null && unfolded.listMouseScrolled(mouseX, mouseY, vertical)) return true;
         if (scroll.mouseScrolled(mouseX, mouseY, vertical)) return true;
         return super.mouseScrolled(mouseX, mouseY, horizontal, vertical);
     }
@@ -344,6 +406,11 @@ public class WoadScreen extends UiScreen {
             listeningKeybind.setKey(key == GLFW.GLFW_KEY_ESCAPE ? GLFW.GLFW_KEY_UNKNOWN : key);
             listeningKeybind = null;
             ConfigStore.save();
+            return true;
+        }
+        // Escape folds an open list back up before it closes the menu.
+        if (input.key() == GLFW.GLFW_KEY_ESCAPE && settingsDropdown() != null) {
+            closeDropdowns();
             return true;
         }
         return super.keyPressed(input);

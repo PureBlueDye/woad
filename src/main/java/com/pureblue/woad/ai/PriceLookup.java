@@ -62,7 +62,7 @@ public final class PriceLookup {
      * from a sentence: "lowest bin hyperion" contains "bin", and "sold" or a price would otherwise
      * restrict the search to ended auctions and return nothing.
      */
-    private static final java.util.Set<String> AUCTION_META = java.util.Set.of(
+    static final java.util.Set<String> AUCTION_META = java.util.Set.of(
             "HighestBid", "StartingBid", "PricePerLevel", "Sold", "Bin", "Seller", "UId",
             "ItemNameContains", "Everything", "HasCreationTime",
             "EndBefore", "EndAfter", "ItemCreatedBefore", "ItemCreatedAfter");

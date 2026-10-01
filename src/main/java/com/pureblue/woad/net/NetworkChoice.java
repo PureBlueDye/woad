@@ -97,7 +97,12 @@ public final class NetworkChoice {
                 break;
             }
         }
-        selected = options.get((index + 1) % options.size()).id();
+        select(options.get((index + 1) % options.size()).id());
+    }
+
+    /** Chooses an adapter by its id ({@code ""} for automatic) and remembers it. */
+    public static void select(String id) {
+        selected = id == null ? "" : id;
         write(selected);
         LOGGER.info("[Woad] network adapter set to '{}'", selected.isEmpty() ? "automatic" : selected);
     }

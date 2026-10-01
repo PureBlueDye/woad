@@ -2,8 +2,10 @@ package com.pureblue.woad.ui;
 
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -78,6 +80,12 @@ public abstract class UiScreen extends Screen {
         float previous = Draw.pushAlpha(p);
         try {
             renderContent(ctx, mouseX, mouseY, delta);
+            // Unfolded lists go over everything the screen drew.
+            for (UiWidget component : components) {
+                if (component instanceof UiDropdown dropdown) {
+                    dropdown.renderList(ctx, mouseX, mouseY, this.width, this.height);
+                }
+            }
         } finally {
             Draw.popAlpha(previous);
             ctx.pose().popMatrix();
@@ -85,8 +93,30 @@ public abstract class UiScreen extends Screen {
         tooltip.render(ctx, mouseX, mouseY, this.width, this.height);
     }
 
+    /** The dropdown among this screen's components whose list is unfolded, if any. */
+    protected UiDropdown openDropdown() {
+        for (UiWidget component : components) {
+            if (component instanceof UiDropdown dropdown && dropdown.isOpen()) return dropdown;
+        }
+        return null;
+    }
+
+    @Override
+    public boolean keyPressed(KeyEvent input) {
+        // Escape folds an open list back up before it closes the screen.
+        UiDropdown unfolded = openDropdown();
+        if (unfolded != null && input.key() == GLFW.GLFW_KEY_ESCAPE) {
+            unfolded.close();
+            return true;
+        }
+        return super.keyPressed(input);
+    }
+
     @Override
     public boolean mouseClicked(MouseButtonEvent click, boolean doubled) {
+        // An unfolded list takes the click first: a pick, or a click elsewhere that only closes it.
+        UiDropdown unfolded = openDropdown();
+        if (unfolded != null && unfolded.listMouseClicked(click.x(), click.y(), click.button())) return true;
         for (UiScroll scroll : scrolls) {
             if (scroll.mouseClicked(click.x(), click.y(), click.button())) return true;
         }
@@ -117,6 +147,8 @@ public abstract class UiScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mx, double my, double horizontal, double vertical) {
+        UiDropdown unfolded = openDropdown();
+        if (unfolded != null && unfolded.listMouseScrolled(mx, my, vertical)) return true;
         for (UiScroll scroll : scrolls) {
             if (scroll.mouseScrolled(mx, my, vertical)) return true;
         }

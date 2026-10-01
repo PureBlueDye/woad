@@ -379,6 +379,17 @@ public final class Draw {
         line(ctx, cx, cy + h / 2f, cx + h, cy - h / 2f, 1.2f, color);
     }
 
+    /**
+     * A chevron that turns from pointing down ({@code flip} 0) to pointing up ({@code flip} 1), as a
+     * dropdown's arrow does while its list opens.
+     */
+    public static void chevronFlip(GuiGraphicsExtractor ctx, float cx, float cy, float size, float flip, int color) {
+        float h = size / 2f;
+        float s = (1 - 2 * flip) * h / 2f; // tip below the centre, then above it
+        line(ctx, cx - h, cy - s, cx, cy + s, 1.2f, color);
+        line(ctx, cx, cy + s, cx + h, cy - s, 1.2f, color);
+    }
+
     /** A right-pointing chevron: "go", "run", "open". */
     public static void chevronRight(GuiGraphicsExtractor ctx, float cx, float cy, float size, int color) {
         float h = size / 2f;

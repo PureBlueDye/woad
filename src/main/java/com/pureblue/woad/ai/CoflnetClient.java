@@ -75,6 +75,18 @@ public final class CoflnetClient {
      * @return the best match, or {@code null} when nothing resembles the text
      */
     public static Item findItem(String text) {
+        List<Item> ranked = rankItems(text);
+        return ranked.isEmpty() ? null : ranked.get(0);
+    }
+
+    /**
+     * Every item the search turned up for this text, best match first.
+     *
+     * <p>The AI gets this whole list rather than the single best guess: "necron chest" ranks the
+     * chestplate first, but a model reading "Necron's Chestplate / Starred Necron's Chestplate" can
+     * tell which one the player meant from the rest of the conversation.
+     */
+    public static List<Item> rankItems(String text) {
         String lower = text.toLowerCase(java.util.Locale.ROOT);
         String[] words = lower.trim().split("\\s+");
 
@@ -95,12 +107,15 @@ public final class CoflnetClient {
             if (word.length() >= 4) terms.add(word);
         }
 
-        Item best = null;
+        // Scored once per tag; insertion order breaks ties, so the first hit of a score stays ahead.
+        java.util.LinkedHashMap<String, Item> seen = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Integer> scores = new java.util.HashMap<>();
         int bestScore = 0;
         int queries = 0;
         for (String term : terms) {
             if (queries++ >= 6) break; // keep the whole lookup well under a second
             for (Item item : searchItems(term)) {
+                if (seen.containsKey(item.tag())) continue;
                 int total = 0;
                 int matched = 0;
                 for (String word : item.name().toLowerCase(java.util.Locale.ROOT).split("[^a-z0-9]+")) {
@@ -114,14 +129,15 @@ public final class CoflnetClient {
                 if (matched == 0) continue;
                 // Every word of the name found beats a partial match, then the longer name wins.
                 int score = matched * 10 + (matched == total ? 5 : 0);
-                if (score > bestScore) {
-                    bestScore = score;
-                    best = item;
-                }
+                seen.put(item.tag(), item);
+                scores.put(item.tag(), score);
+                bestScore = Math.max(bestScore, score);
             }
             if (bestScore >= 25) break; // a two-word exact match is good enough, stop querying
         }
-        return best;
+        List<Item> ranked = new ArrayList<>(seen.values());
+        ranked.sort((a, b) -> Integer.compare(scores.get(b.tag()), scores.get(a.tag()))); // stable
+        return ranked;
     }
 
     private static List<Item> searchItems(String term) {
@@ -256,6 +272,11 @@ public final class CoflnetClient {
         long lowest = json.get("lowest").getAsLong();
         long second = json.has("secondLowest") ? json.get("secondLowest").getAsLong() : 0L;
         return lowest <= 0 ? null : new long[]{lowest, second};
+    }
+
+    /** Any public endpoint, by its path after {@code /api} (query string included). */
+    public static JsonElement api(String path) {
+        return get(BASE + path);
     }
 
     private static JsonElement get(String url) {
