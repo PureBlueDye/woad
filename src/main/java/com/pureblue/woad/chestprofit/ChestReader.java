@@ -31,8 +31,12 @@ public final class ChestReader {
     /** The run view's title; long titles get cut off by the game, hence the loose end. */
     private static final Pattern RUN_VIEW = Pattern.compile("^(?:Master (?:Mode )?)?(?:The )?Catacombs - Fl.*$");
     /** A single chest's title. */
+    /**
+     * A single chest's title. Hypixel names the screen after the chest type alone ("Bedrock"), while
+     * the run view calls the same chest "Bedrock Chest"; both are accepted.
+     */
     private static final Pattern CHEST_TITLE =
-            Pattern.compile("^(?:The )?(Wood|Gold|Diamond|Emerald|Obsidian|Bedrock) Chest(?: .*)?$");
+            Pattern.compile("^(?:The )?(Wood|Gold|Diamond|Emerald|Obsidian|Bedrock)(?: Chest)?(?: \\(.*\\))?$");
     /** Croesus' list of runs, "(1/2) Croesus" when it spans pages. */
     private static final Pattern CROESUS = Pattern.compile("^(?:\\(\\d+/\\d+\\) )?Croesus$");
 
@@ -147,7 +151,7 @@ public final class ChestReader {
             boolean opened = lore.stream().anyMatch(line -> line.equalsIgnoreCase("Already opened!"));
             Chest chest = new Chest(plain(name.getString()), colorOf(name), i, contents, cost.coins, cost.items, opened, true);
             chests.add(chest);
-            SEEN.put(chest.name(), chest);
+            SEEN.put(chestType(chest.name()), chest);
         }
         return chests;
     }
@@ -182,7 +186,8 @@ public final class ChestReader {
         }
 
         String name = plain(title.getString());
-        Chest seen = SEEN.get(name);
+        if (!name.endsWith("Chest") && CHEST_TITLE.matcher(name).matches()) name = name + " Chest";
+        Chest seen = SEEN.get(chestType(name));
         if (contents.isEmpty() && seen != null) contents = seen.contents();
         boolean costKnown = true;
         if (cost == null) {
@@ -195,6 +200,12 @@ public final class ChestReader {
         }
         if (contents.isEmpty() && !costKnown) return null; // nothing read yet: the items are still arriving
         return new Chest(name, colorOf(title), -1, contents, cost.coins, cost.items, false, costKnown);
+    }
+
+    /** "Bedrock Chest", "Bedrock", "The Bedrock Chest" → "Bedrock": the same chest whatever the screen calls it. */
+    private static String chestType(String name) {
+        Matcher matcher = CHEST_TITLE.matcher(name);
+        return matcher.matches() ? matcher.group(1) : name;
     }
 
     /** Where the price block starts in a lore, or -1. */
@@ -212,6 +223,12 @@ public final class ChestReader {
      */
     private static Line lootItem(ItemStack stack) {
         String name = plain(stack.getHoverName().getString());
+        // The screen's buttons (go back, the Kismet Feather that rerolls the chest) are not loot,
+        // even when they carry an item's data.
+        for (String line : lore(stack)) {
+            if (line.startsWith("Click to") || line.startsWith("Click here")) return null;
+        }
+        if (name.equals("Go Back") || name.equals("Close") || name.startsWith("Reroll")) return null;
         CustomData data = stack.get(DataComponents.CUSTOM_DATA);
         CompoundTag tag = data == null ? null : data.copyTag();
         String id = tag == null ? "" : tag.getStringOr("id", "");
@@ -225,8 +242,26 @@ public final class ChestReader {
                 return new Line(bookLabel(key, level), bookTag, stack.getCount(), false);
             }
         }
-        if (!id.isEmpty()) {
+        // Some items share one generic id and are told apart by name only: every shard is
+        // ATTRIBUTE_SHARD — which Coflnet lists too, at next to nothing — while "Apex Dragon Shard"
+        // trades as SHARD_APEX_DRAGON. So a shard is always known by its name (Coflnet's list maps
+        // shard names to their real tags, irregular ones included), and so is any item whose id
+        // Coflnet has never heard of.
+        Line named = lootLine(name);
+        if (named.tag() != null && named.tag().startsWith("SHARD_")) {
+            int count = named.count() > 1 ? named.count() : stack.getCount();
+            return new Line(named.label(), named.tag(), count, false);
+        }
+        if (!id.isEmpty() && (MarketPrices.isTag(id) || !MarketPrices.namesReady())) {
             return new Line(name, id, stack.getCount(), id.startsWith("ESSENCE_"));
+        }
+        if (!id.isEmpty()) {
+            Line byName = lootLine(name);
+            if (byName.tag() != null) {
+                int count = byName.count() > 1 ? byName.count() : stack.getCount();
+                return new Line(byName.label(), byName.tag(), count, byName.essence());
+            }
+            return new Line(name, id, stack.getCount(), false); // shown as unknown ("?")
         }
         if (name.contains("Essence")) {
             Line line = lootLine(name);

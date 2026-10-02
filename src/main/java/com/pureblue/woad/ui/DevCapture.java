@@ -528,15 +528,21 @@ public final class DevCapture {
                     box.setItem(10, book("ultimate_last_stand", 2));
                     box.setItem(11, book("ultimate_combo", 2));
                     box.setItem(12, sbItem(net.minecraft.world.item.Items.NETHER_STAR, "Wither Catalyst", "WITHER_CATALYST"));
-                    box.setItem(13, sbItem(net.minecraft.world.item.Items.PRISMARINE_SHARD, "Apex Dragon Shard", "SHARD_APEX_DRAGON"));
+                    box.setItem(13, sbItem(net.minecraft.world.item.Items.PRISMARINE_SHARD, "Apex Dragon Shard", "ATTRIBUTE_SHARD"));
                     box.setItem(14, named(new net.minecraft.world.item.ItemStack(
                             net.minecraft.world.item.Items.PLAYER_HEAD), "Wither Essence x103", null));
                     box.setItem(15, named(new net.minecraft.world.item.ItemStack(
                             net.minecraft.world.item.Items.PLAYER_HEAD), "Undead Essence x129", null));
                     box.setItem(31, named(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.CHEST),
                             "Open Reward Chest", List.of("Cost", "2,000,000 Coins", "", "Click to open!")));
-                    openChest(mc, box, net.minecraft.network.chat.Component.literal("Bedrock Chest")
-                            .withStyle(net.minecraft.ChatFormatting.DARK_GRAY));
+                    // The screen's buttons, as on Hypixel: they must not count as loot.
+                    box.setItem(48, named(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.ARROW),
+                            "Go Back", List.of("To Croesus")));
+                    var feather = sbItem(net.minecraft.world.item.Items.FEATHER, "Reroll Chest", "KISMET_FEATHER");
+                    named(feather, "Reroll Chest", List.of("Reroll this chest for a Kismet Feather.", "", "Click to reroll this chest!"));
+                    box.setItem(50, feather);
+                    // Hypixel titles this screen with the chest type alone.
+                    openChest(mc, box, net.minecraft.network.chat.Component.literal("Bedrock"));
                 });
                 act(mc -> hover(mc, 4, 4));
                 grab("chests_single_instasell");
