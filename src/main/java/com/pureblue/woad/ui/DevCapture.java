@@ -8,6 +8,7 @@ import net.minecraft.client.gui.screens.Screen;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.List;
 import java.util.function.Consumer;
 
 /**
@@ -106,6 +107,73 @@ public final class DevCapture {
         hover(mc, (float) x, (float) y);
         menu.mouseClicked(new net.minecraft.client.input.MouseButtonEvent(x, y,
                 new net.minecraft.client.input.MouseButtonInfo(0, 0)), false);
+    }
+
+    // ---- Fake dungeon chests, for the Chest Profit pictures ----
+
+    private static void openChest(Minecraft mc, net.minecraft.world.SimpleContainer box,
+                                  net.minecraft.network.chat.Component title) {
+        var menu = net.minecraft.world.inventory.ChestMenu.sixRows(4242, mc.player.getInventory(), box);
+        mc.setScreen(new net.minecraft.client.gui.screens.inventory.ContainerScreen(menu, mc.player.getInventory(), title));
+    }
+
+    private static net.minecraft.world.item.ItemStack named(net.minecraft.world.item.ItemStack stack, String name,
+                                                            List<String> lore) {
+        stack.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME, net.minecraft.network.chat.Component.literal(name));
+        if (lore != null) {
+            List<net.minecraft.network.chat.Component> lines = new java.util.ArrayList<>();
+            for (String line : lore) lines.add(net.minecraft.network.chat.Component.literal(line));
+            stack.set(net.minecraft.core.component.DataComponents.LORE, new net.minecraft.world.item.component.ItemLore(lines));
+        }
+        return stack;
+    }
+
+    private static net.minecraft.world.item.ItemStack chestItem(String name, net.minecraft.ChatFormatting colour,
+                                                                List<String> contents, List<String> cost) {
+        List<String> lore = new java.util.ArrayList<>();
+        lore.add("Contents");
+        lore.addAll(contents);
+        lore.add("");
+        lore.add("Cost");
+        lore.addAll(cost);
+        lore.add("");
+        lore.add("Click to open this chest!");
+        var stack = named(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.CHEST), name, lore);
+        stack.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME,
+                net.minecraft.network.chat.Component.literal(name).withStyle(colour));
+        return stack;
+    }
+
+    private static net.minecraft.world.item.ItemStack sbItem(net.minecraft.world.item.Item item, String name, String id) {
+        var tag = new net.minecraft.nbt.CompoundTag();
+        tag.putString("id", id);
+        var stack = named(new net.minecraft.world.item.ItemStack(item), name, null);
+        stack.set(net.minecraft.core.component.DataComponents.CUSTOM_DATA, net.minecraft.world.item.component.CustomData.of(tag));
+        return stack;
+    }
+
+    private static net.minecraft.world.item.ItemStack book(String enchant, int level) {
+        var tag = new net.minecraft.nbt.CompoundTag();
+        tag.putString("id", "ENCHANTED_BOOK");
+        var enchants = new net.minecraft.nbt.CompoundTag();
+        enchants.putInt(enchant, level);
+        tag.put("enchantments", enchants);
+        var stack = named(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.ENCHANTED_BOOK), "Enchanted Book", null);
+        stack.set(net.minecraft.core.component.DataComponents.CUSTOM_DATA, net.minecraft.world.item.component.CustomData.of(tag));
+        return stack;
+    }
+
+    /** Puts the pointer on a row of the Chest Profit panel (first row = 0), left of the chest screen. */
+    private static void hoverSlotRow(Minecraft mc, int row) {
+        if (!(mc.screen instanceof net.minecraft.client.gui.screens.inventory.AbstractContainerScreen<?> screen)) return;
+        var gui = (com.pureblue.woad.mixin.HandledScreenAccessor) screen;
+        hover(mc, gui.woad$getX() - 40, gui.woad$getY() + 6 + 12 + row * 11 + 5);
+    }
+
+    private static void setPriceMode(String mode) {
+        for (var setting : com.pureblue.woad.core.FeatureManager.CHEST_PROFIT.getSettings()) {
+            if (setting instanceof com.pureblue.woad.core.setting.ModeSetting choice) choice.set(mode);
+        }
     }
 
     /** The capture sequences, one per migrated screen. */
@@ -404,6 +472,69 @@ public final class DevCapture {
                 });
                 act(mc -> hover(mc, mc.getWindow().getGuiScaledWidth() - 6 - 55, 26 + 6 + 7));
                 grab("pick_net");
+            }
+            case "chests" -> {
+                // Croesus' list of runs: one untouched, one with the key still usable, one finished.
+                act(mc -> {
+                    var box = new net.minecraft.world.SimpleContainer(54);
+                    box.setItem(10, named(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.PLAYER_HEAD),
+                            "Master Mode The Catacombs", List.of("Floor VII", "", "No chests opened yet!")));
+                    box.setItem(11, named(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.PLAYER_HEAD),
+                            "The Catacombs", List.of("Floor VII", "", "Opened Chest: Bedrock Chest")));
+                    box.setItem(12, named(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.PLAYER_HEAD),
+                            "The Catacombs", List.of("Floor VI", "", "Opened Chest: Obsidian Chest", "No more chests to open!")));
+                    openChest(mc, box, net.minecraft.network.chat.Component.literal("Croesus"));
+                });
+                act(mc -> hover(mc, 4, 4));
+                grab("chests_croesus");
+                // Croesus' run view, rebuilt from a real one: four chests, the Bedrock one as seen in game.
+                act(mc -> {
+                    var box = new net.minecraft.world.SimpleContainer(54);
+                    box.setItem(26, chestItem("Obsidian Chest", net.minecraft.ChatFormatting.DARK_PURPLE,
+                            List.of("Fifth Master Star", "Wither Essence x40"), List.of("1,000,000 Coins")));
+                    box.setItem(20, chestItem("Wood Chest", net.minecraft.ChatFormatting.GOLD,
+                            List.of("Enchanted Book (Feather Falling VI)", "Undead Essence x12"), List.of("FREE")));
+                    box.setItem(22, chestItem("Gold Chest", net.minecraft.ChatFormatting.YELLOW,
+                            List.of("Recombobulator 3000", "Wither Essence x20"), List.of("100,000 Coins")));
+                    box.setItem(24, chestItem("Bedrock Chest", net.minecraft.ChatFormatting.DARK_GRAY,
+                            List.of("Enchanted Book (Rejuvenate III)", "Enchanted Book (Last Stand II)",
+                                    "Enchanted Book (Combo II)", "Wither Catalyst", "Apex Dragon Shard",
+                                    "Wither Essence x103", "Undead Essence x129"),
+                            List.of("2,000,000 Coins")));
+                    openChest(mc, box, net.minecraft.network.chat.Component.literal("Catacombs - Floor VII"));
+                });
+                act(mc -> {});
+                act(mc -> {});
+                act(mc -> {});
+                act(mc -> hoverSlotRow(mc, 0));
+                act(mc -> {});
+                grab("chests_run");
+                // The same Bedrock chest opened: real items, price on the button.
+                act(mc -> {
+                    var box = new net.minecraft.world.SimpleContainer(54);
+                    for (int i = 0; i < 54; i++) {
+                        box.setItem(i, named(new net.minecraft.world.item.ItemStack(
+                                net.minecraft.world.item.Items.BLACK_STAINED_GLASS_PANE), " ", null));
+                    }
+                    box.setItem(9, book("rejuvenate", 3));
+                    box.setItem(10, book("ultimate_last_stand", 2));
+                    box.setItem(11, book("ultimate_combo", 2));
+                    box.setItem(12, sbItem(net.minecraft.world.item.Items.NETHER_STAR, "Wither Catalyst", "WITHER_CATALYST"));
+                    box.setItem(13, sbItem(net.minecraft.world.item.Items.PRISMARINE_SHARD, "Apex Dragon Shard", "SHARD_APEX_DRAGON"));
+                    box.setItem(14, named(new net.minecraft.world.item.ItemStack(
+                            net.minecraft.world.item.Items.PLAYER_HEAD), "Wither Essence x103", null));
+                    box.setItem(15, named(new net.minecraft.world.item.ItemStack(
+                            net.minecraft.world.item.Items.PLAYER_HEAD), "Undead Essence x129", null));
+                    box.setItem(31, named(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.CHEST),
+                            "Open Reward Chest", List.of("Cost", "2,000,000 Coins", "", "Click to open!")));
+                    openChest(mc, box, net.minecraft.network.chat.Component.literal("Bedrock Chest")
+                            .withStyle(net.minecraft.ChatFormatting.DARK_GRAY));
+                });
+                act(mc -> hover(mc, 4, 4));
+                grab("chests_single_instasell");
+                act(mc -> setPriceMode("Sell offer"));
+                grab("chests_single_selloffer");
+                act(mc -> setPriceMode("Insta-sell"));
             }
             default -> grab("unknown_sequence");
         }

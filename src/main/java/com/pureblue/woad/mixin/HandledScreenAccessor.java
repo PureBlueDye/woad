@@ -13,4 +13,7 @@ public interface HandledScreenAccessor {
 
     @Accessor("topPos")
     int woad$getY();
+
+    @Accessor("imageWidth")
+    int woad$getImageWidth();
 }
