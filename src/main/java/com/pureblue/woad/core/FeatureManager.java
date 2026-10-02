@@ -7,7 +7,7 @@ import com.pureblue.woad.features.CustomLavaFeature;
 import com.pureblue.woad.features.ExplosiveShotFeature;
 import com.pureblue.woad.features.InventoryButtonsFeature;
 import com.pureblue.woad.features.JerryTimerFeature;
-import com.pureblue.woad.features.LoadoutKeybindsFeature;
+import com.pureblue.woad.features.RenderOptimizerFeature;
 import com.pureblue.woad.features.TickTimeFeature;
 import com.pureblue.woad.features.TranslatorFeature;
 
@@ -24,8 +24,8 @@ public final class FeatureManager {
     public static final JerryTimerFeature JERRY_TIMER = register(new JerryTimerFeature());
     public static final CustomLavaFeature CUSTOM_LAVA = register(new CustomLavaFeature());
     public static final InventoryButtonsFeature INV_BUTTONS = register(new InventoryButtonsFeature());
-    public static final LoadoutKeybindsFeature LOADOUT_KEYBINDS = register(new LoadoutKeybindsFeature());
     public static final ChestProfitFeature CHEST_PROFIT = register(new ChestProfitFeature());
+    public static final RenderOptimizerFeature RENDER_OPTIMIZER = register(new RenderOptimizerFeature());
     public static final AiChatFeature AI_CHAT = register(new AiChatFeature());
     public static final TranslatorFeature TRANSLATOR = register(new TranslatorFeature());
     public static final BlackjackFeature BLACKJACK = register(new BlackjackFeature());

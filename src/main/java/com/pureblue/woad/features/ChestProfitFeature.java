@@ -52,6 +52,9 @@ public class ChestProfitFeature extends Feature {
     private final BooleanSetting countEssence = addSetting(new BooleanSetting("Count essence",
             "Add the essence in each chest to its value.", true));
 
+    private final BooleanSetting ignoreFish = addSetting(new BooleanSetting("Ignore fish",
+            "Leave the \"... the Fish\" items (Storm the Fish, Maxor the Fish...) out of the value.", true));
+
     private final ModeSetting priceMode = addSetting(new ModeSetting("Item price",
             "Insta-sell: what selling the loot right now pays. Sell offer: the cheapest sell offer "
                     + "(the instant-buy price, or the lowest BIN on the auction house), which listing "
@@ -302,7 +305,7 @@ public class ChestProfitFeature extends Feature {
         List<Row> rows = new ArrayList<>();
         for (ChestReader.Line line : chest.contents()) {
             String label = line.count() > 1 ? line.label() + " x" + line.count() : line.label();
-            if (line.essence() && !countEssence.enabled()) {
+            if ((line.essence() && !countEssence.enabled()) || (isFish(line) && ignoreFish.enabled())) {
                 rows.add(new Row(label, "off", Theme.TEXT_3, true));
                 continue;
             }
@@ -319,7 +322,11 @@ public class ChestProfitFeature extends Feature {
         }
 
         long cost = chest.coins();
-        if (chest.coins() > 0) rows.add(new Row("Cost", "-" + coins(chest.coins()), Theme.ERR, false));
+        if (!chest.costKnown()) {
+            rows.add(new Row("Cost", "?", Theme.WARN, false)); // not counted: the profit is the loot alone
+        } else if (chest.coins() > 0) {
+            rows.add(new Row("Cost", "-" + coins(chest.coins()), Theme.ERR, false));
+        }
         for (ChestReader.Line line : chest.costItems()) {
             Long worth = worth(line, sellOffer);
             if (worth == null) {
@@ -330,6 +337,12 @@ public class ChestProfitFeature extends Feature {
             }
         }
         return new Valued(chest, loot - cost, pending, rows);
+    }
+
+    /** The "... the Fish" collectibles: Storm the Fish, Maxor the Fish, Chill the Fish (tag CHILL_THE_FISH_2)... */
+    private static boolean isFish(ChestReader.Line line) {
+        if (line.tag() != null && line.tag().matches(".*_THE_FISH(?:_\\d+)?")) return true;
+        return line.label().toLowerCase(java.util.Locale.ROOT).endsWith(" the fish");
     }
 
     /** What a loot line is worth, {@code null} while its price is on its way, -1 if unknown. */

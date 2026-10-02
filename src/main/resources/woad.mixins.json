@@ -13,7 +13,9 @@
     "ItemRefreshMixin",
     "FluidStateModelSetMixin",
     "GuiGraphicsExtractorAccessor",
-    "FontAccessor"
+    "FontAccessor",
+    "EntityRenderDispatcherMixin",
+    "ClientPacketListenerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

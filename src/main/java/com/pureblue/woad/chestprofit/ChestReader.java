@@ -32,7 +32,7 @@ public final class ChestReader {
     private static final Pattern RUN_VIEW = Pattern.compile("^(?:Master (?:Mode )?)?(?:The )?Catacombs - Fl.*$");
     /** A single chest's title. */
     private static final Pattern CHEST_TITLE =
-            Pattern.compile("^(Wood|Gold|Diamond|Emerald|Obsidian|Bedrock) Chest$");
+            Pattern.compile("^(?:The )?(Wood|Gold|Diamond|Emerald|Obsidian|Bedrock) Chest(?: .*)?$");
     /** Croesus' list of runs, "(1/2) Croesus" when it spans pages. */
     private static final Pattern CROESUS = Pattern.compile("^(?:\\(\\d+/\\d+\\) )?Croesus$");
 
@@ -40,6 +40,10 @@ public final class ChestReader {
     /** A loot line: a name, optionally followed by "x12" (essence, stacked drops). */
     private static final Pattern AMOUNT = Pattern.compile("^(.+?)\\s+x([\\d,]+)$");
     private static final Pattern COINS = Pattern.compile("^([\\d,]+) Coins$");
+    /** A lore line opening the price: "Cost" alone, or "Cost: 2,000,000 Coins" on one line. */
+    private static final Pattern COST_LINE = Pattern.compile("^Cost(?::\\s*(.*))?$");
+    /** A book's lore title when the item carries no data: "Rejuvenate III". */
+    private static final Pattern ENCHANT_LEVEL = Pattern.compile("^(.+) ([IVXLC]+|\\d+)$");
 
     /**
      * One thing in a chest, or paid to open it.
@@ -61,9 +65,10 @@ public final class ChestReader {
      * @param coins    the coin part of the price
      * @param costItems anything else the price asks for (a Dungeon Chest Key)
      * @param opened   already claimed in this run
+     * @param costKnown false when the price could not be read anywhere
      */
     public record Chest(String name, int color, int slot, List<Line> contents, long coins, List<Line> costItems,
-                        boolean opened) {
+                        boolean opened, boolean costKnown) {
 
         /** Whether opening it asks for a Dungeon Chest Key already, as a second chest does. */
         public boolean needsKey() {
@@ -130,20 +135,29 @@ public final class ChestReader {
             if (stack.isEmpty()) continue;
             List<String> lore = lore(stack);
             int contentsAt = lore.indexOf("Contents");
-            int costAt = lore.indexOf("Cost");
+            int costAt = costLine(lore);
             if (contentsAt < 0 || costAt < contentsAt) continue; // not a chest, or nothing to read
 
             List<Line> contents = new ArrayList<>();
             for (int l = contentsAt + 1; l < costAt && !lore.get(l).isEmpty(); l++) {
                 contents.add(lootLine(lore.get(l)));
             }
-            Cost cost = cost(lore, costAt + 1);
+            Cost cost = cost(lore, costAt);
             Component name = stack.getHoverName();
             boolean opened = lore.stream().anyMatch(line -> line.equalsIgnoreCase("Already opened!"));
-            chests.add(new Chest(plain(name.getString()), colorOf(name), i, contents, cost.coins, cost.items, opened));
+            Chest chest = new Chest(plain(name.getString()), colorOf(name), i, contents, cost.coins, cost.items, opened, true);
+            chests.add(chest);
+            SEEN.put(chest.name(), chest);
         }
         return chests;
     }
+
+    /**
+     * The chests of the last run view, by name. Opening one of them shows its loot as items and
+     * its price on a button, but if the game ever leaves either out, what the run view said about
+     * that chest fills the gap.
+     */
+    private static final java.util.Map<String, Chest> SEEN = new java.util.concurrent.ConcurrentHashMap<>();
 
     // ---- An opened chest ------------------------------------------------------------------------
 
@@ -158,16 +172,37 @@ public final class ChestReader {
             ItemStack stack = menu.slots.get(i).getItem();
             if (stack.isEmpty()) continue;
             List<String> lore = lore(stack);
-            int costAt = lore.indexOf("Cost");
+            int costAt = costLine(lore);
             if (costAt >= 0) {
-                cost = cost(lore, costAt + 1); // the "open" button
+                cost = cost(lore, costAt); // the "open" button
                 continue;
             }
             Line line = lootItem(stack);
             if (line != null) contents.add(line);
         }
-        if (cost == null) return null;
-        return new Chest(plain(title.getString()), colorOf(title), -1, contents, cost.coins, cost.items, false);
+
+        String name = plain(title.getString());
+        Chest seen = SEEN.get(name);
+        if (contents.isEmpty() && seen != null) contents = seen.contents();
+        boolean costKnown = true;
+        if (cost == null) {
+            if (seen != null) {
+                cost = new Cost(seen.coins(), seen.costItems());
+            } else {
+                cost = new Cost(0, List.of()); // shown as unknown rather than not at all
+                costKnown = false;
+            }
+        }
+        if (contents.isEmpty() && !costKnown) return null; // nothing read yet: the items are still arriving
+        return new Chest(name, colorOf(title), -1, contents, cost.coins, cost.items, false, costKnown);
+    }
+
+    /** Where the price block starts in a lore, or -1. */
+    private static int costLine(List<String> lore) {
+        for (int l = 0; l < lore.size(); l++) {
+            if (COST_LINE.matcher(lore.get(l)).matches()) return l;
+        }
+        return -1;
     }
 
     /**
@@ -198,7 +233,18 @@ public final class ChestReader {
             int count = line.count() > 1 ? line.count() : stack.getCount();
             return new Line(line.label(), line.tag(), count, line.essence());
         }
-        return null;
+        if (name.equals("Enchanted Book")) {
+            List<String> lore = lore(stack);
+            Matcher enchant = lore.isEmpty() ? null : ENCHANT_LEVEL.matcher(lore.get(0));
+            if (enchant != null && enchant.matches()) {
+                String tagged = bookTag(enchant.group(1), level(enchant.group(2)));
+                if (tagged != null) return new Line(lore.get(0), tagged, stack.getCount(), false);
+            }
+            return null;
+        }
+        // Shown without its data: known by name, or it is decoration (panes, buttons).
+        String byName = MarketPrices.tagFor(name);
+        return byName == null ? null : new Line(name, byName, stack.getCount(), byName.startsWith("ESSENCE_"));
     }
 
     // ---- Lines ----------------------------------------------------------------------------------
@@ -237,11 +283,14 @@ public final class ChestReader {
     private record Cost(long coins, List<Line> items) {}
 
     /** The price block under "Cost": coins ("2,000,000 Coins", or "FREE") and any item asked. */
-    private static Cost cost(List<String> lore, int from) {
+    private static Cost cost(List<String> lore, int costAt) {
         long coins = 0;
         List<Line> items = new ArrayList<>();
-        for (int l = from; l < lore.size() && !lore.get(l).isEmpty(); l++) {
-            String text = lore.get(l);
+        List<String> lines = new ArrayList<>();
+        Matcher inline = COST_LINE.matcher(lore.get(costAt));
+        if (inline.matches() && inline.group(1) != null && !inline.group(1).isBlank()) lines.add(inline.group(1).trim());
+        for (int l = costAt + 1; l < lore.size() && !lore.get(l).isEmpty(); l++) lines.add(lore.get(l));
+        for (String text : lines) {
             Matcher matcher = COINS.matcher(text);
             if (matcher.matches()) {
                 coins += parseLong(matcher.group(1));

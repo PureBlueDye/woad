@@ -7,7 +7,7 @@ import com.pureblue.woad.core.Woad;
 import com.pureblue.woad.customitem.CustomItemApplier;
 import com.pureblue.woad.gui.CustomItemScreen;
 import com.pureblue.woad.core.FeatureManager;
-import com.pureblue.woad.features.LoadoutKeybindsFeature;
+import com.pureblue.woad.core.SkyBlockArea;
 import com.pureblue.woad.gui.WoadScreen;
 import com.pureblue.woad.net.NetworkChoice;
 import com.pureblue.woad.ui.DevCapture;
@@ -90,6 +90,13 @@ public class WoadClient implements ClientModInitializer {
                                 .executes(ctx -> {
                                     pendingHudOpen = true;
                                     return 1;
+                                }))
+                        // What the mod reads to know where you are, for when a dungeon-only
+                        // option does not kick in.
+                        .then(ClientCommands.literal("area")
+                                .executes(ctx -> {
+                                    reportArea(Minecraft.getInstance());
+                                    return 1;
                                 }))));
 
         // "/woad ui": every component of the design system on one screen. Development builds
@@ -129,14 +136,6 @@ public class WoadClient implements ClientModInitializer {
                 ScreenMouseEvents.allowMouseClick(screen).register((scr, click) ->
                         !(FeatureManager.TRANSLATOR.isEnabled()
                                 && FeatureManager.TRANSLATOR.onChatClick(click.x(), click.y(), click.button())));
-            }
-            // Loadout keybinds: in the "(x/y) Loadouts" menu, a bound key selects that loadout.
-            if (screen instanceof AbstractContainerScreen<?>) {
-                String title = screen.getTitle().getString().replaceAll("§.", "");
-                if (LoadoutKeybindsFeature.isLoadoutMenu(title)) {
-                    ScreenKeyboardEvents.allowKeyPress(screen).register((scr, key) ->
-                            !FeatureManager.LOADOUT_KEYBINDS.onKeyInMenu((AbstractContainerScreen<?>) scr, key.key()));
-                }
             }
         });
 
@@ -227,7 +226,23 @@ public class WoadClient implements ClientModInitializer {
         return lines;
     }
 
+    /** Prints whether the mod thinks you are in the Catacombs, and the lines it decided that from. */
+    private static void reportArea(Minecraft mc) {
+        if (mc.player == null) return;
+        mc.gui.getChat().addClientSystemMessage(Component.literal("[Woad] In Catacombs: " + SkyBlockArea.inCatacombs())
+                .withStyle(ChatFormatting.AQUA));
+        for (String line : SkyBlockArea.sidebarLines(mc)) {
+            mc.gui.getChat().addClientSystemMessage(Component.literal("  sidebar: " + line).withStyle(ChatFormatting.GRAY));
+        }
+        for (String line : SkyBlockArea.tabLines(mc)) {
+            if (line.contains("Dungeon") || line.contains("Area")) {
+                mc.gui.getChat().addClientSystemMessage(Component.literal("  tab: " + line).withStyle(ChatFormatting.GRAY));
+            }
+        }
+    }
+
     private void onClientTick(Minecraft client) {
+        SkyBlockArea.tick(client);
         while (openMenuKey.consumeClick()) {
             pendingOpen = true;
         }

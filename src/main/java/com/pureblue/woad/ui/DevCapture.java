@@ -170,6 +170,14 @@ public final class DevCapture {
         hover(mc, gui.woad$getX() - 40, gui.woad$getY() + 6 + 12 + row * 11 + 5);
     }
 
+    private static void setSkulls(boolean hide) {
+        for (var setting : com.pureblue.woad.core.FeatureManager.RENDER_OPTIMIZER.getSettings()) {
+            if (setting instanceof com.pureblue.woad.core.setting.BooleanSetting toggle && toggle.enabled() != hide) {
+                toggle.toggle();
+            }
+        }
+    }
+
     private static void setPriceMode(String mode) {
         for (var setting : com.pureblue.woad.core.FeatureManager.CHEST_PROFIT.getSettings()) {
             if (setting instanceof com.pureblue.woad.core.setting.ModeSetting choice) choice.set(mode);
@@ -535,6 +543,106 @@ public final class DevCapture {
                 act(mc -> setPriceMode("Sell offer"));
                 grab("chests_single_selloffer");
                 act(mc -> setPriceMode("Insta-sell"));
+                // A chest opened without its price button: the price comes from the run view seen before.
+                act(mc -> {
+                    var box = new net.minecraft.world.SimpleContainer(54);
+                    box.setItem(11, sbItem(net.minecraft.world.item.Items.TROPICAL_FISH, "Storm the Fish", "STORM_THE_FISH"));
+                    box.setItem(13, sbItem(net.minecraft.world.item.Items.PRISMARINE_CRYSTALS, "Recombobulator 3000", "RECOMBOBULATOR_3000"));
+                    box.setItem(15, named(new net.minecraft.world.item.ItemStack(
+                            net.minecraft.world.item.Items.PLAYER_HEAD), "Wither Essence x20", null));
+                    openChest(mc, box, net.minecraft.network.chat.Component.literal("Gold Chest")
+                            .withStyle(net.minecraft.ChatFormatting.YELLOW));
+                });
+                act(mc -> {});
+                act(mc -> {});
+                grab("chests_single_fish");
+            }
+            case "skulls" -> {
+                // A Catacombs-like sidebar, two skull stands and a zombie-head stand as a control.
+                act(mc -> {
+                    mc.setScreen(null);
+                    var net = mc.player.connection;
+                    net.sendCommand("scoreboard objectives add woadshot dummy \"SKYBLOCK\"");
+                    net.sendCommand("scoreboard objectives setdisplay sidebar woadshot");
+                    // As Hypixel writes it: the visible text lives in the team prefix of a placeholder entry.
+                    net.sendCommand("team add woadshot");
+                    // Split mid-word with an emoji entry name in between, as Hypixel does.
+                    net.sendCommand("team modify woadshot prefix \" ⏣ The Catac\"");
+                    net.sendCommand("team modify woadshot suffix \"ombs (F7)\"");
+                    net.sendCommand("team join woadshot 🎂");
+                    net.sendCommand("scoreboard players set 🎂 woadshot 1");
+                    net.sendCommand("summon armor_stand ^-1 ^ ^3 {Tags:[\"woadshot\"],equipment:{head:{id:\"minecraft:skeleton_skull\",count:1}}}");
+                    net.sendCommand("summon armor_stand ^ ^ ^3 {Tags:[\"woadshot\"],equipment:{head:{id:\"minecraft:zombie_head\",count:1}}}");
+                    net.sendCommand("summon armor_stand ^1 ^ ^3 {Tags:[\"woadshot\"],NoGravity:1b,Motion:[0.0,0.0,0.02],equipment:{head:{id:\"minecraft:skeleton_skull\",count:1}}}");
+                });
+                act(mc -> {});
+                act(mc -> {});
+                act(mc -> org.slf4j.LoggerFactory.getLogger("Woad").info("[shot] catacombs={} sidebar={}",
+                        com.pureblue.woad.core.SkyBlockArea.inCatacombs(), com.pureblue.woad.core.SkyBlockArea.sidebarLines(mc)));
+                grab("skulls_hidden");
+                act(mc -> setSkulls(false));
+                act(mc -> {});
+                grab("skulls_shown");
+                act(mc -> {
+                    setSkulls(true);
+                    var net = mc.player.connection;
+                    net.sendCommand("kill @e[tag=woadshot]");
+                    net.sendCommand("scoreboard objectives remove woadshot");
+                    net.sendCommand("team remove woadshot");
+                });
+                WoadScreen menu = new WoadScreen();
+                open(menu);
+                act(mc -> menu.selectFeature("Render Optimizer"));
+                grab("skulls_menu");
+            }
+            case "archer" -> {
+                act(mc -> {
+                    mc.setScreen(null);
+                    var net = mc.player.connection;
+                    net.sendCommand("scoreboard objectives add woadshot dummy \"SKYBLOCK\"");
+                    net.sendCommand("scoreboard objectives setdisplay sidebar woadshot");
+                    net.sendCommand("team add woadshot");
+                    net.sendCommand("team modify woadshot prefix \" ⏣ The Catac\"");
+                    net.sendCommand("team modify woadshot suffix \"ombs (F7)\"");
+                    net.sendCommand("team join woadshot 🎂");
+                    net.sendCommand("scoreboard players set 🎂 woadshot 1");
+                });
+                act(mc -> {});
+                act(mc -> {
+                    var net = mc.player.connection;
+                    // Two bone meals (the passive) left and right, a bone in the middle as the control.
+                    net.sendCommand("summon item ^-1 ^1 ^3 {Tags:[\"woadshot\"],NoGravity:1b,PickupDelay:32767,Item:{id:\"minecraft:bone_meal\",count:1}}");
+                    net.sendCommand("summon item ^ ^1 ^3 {Tags:[\"woadshot\"],NoGravity:1b,PickupDelay:32767,Item:{id:\"minecraft:bone\",count:1}}");
+                    net.sendCommand("summon item ^1 ^1 ^3 {Tags:[\"woadshot\"],NoGravity:1b,PickupDelay:32767,Item:{id:\"minecraft:bone_meal\",count:1}}");
+                });
+                act(mc -> {});
+                grab("archer_hidden");
+                act(mc -> {
+                    for (var setting : com.pureblue.woad.core.FeatureManager.RENDER_OPTIMIZER.getSettings()) {
+                        if (setting.getName().equals("Hide archer passive")) ((com.pureblue.woad.core.setting.BooleanSetting) setting).toggle();
+                    }
+                    var net = mc.player.connection;
+                    net.sendCommand("kill @e[tag=woadshot]");
+                    net.sendCommand("summon item ^-1 ^1 ^3 {Tags:[\"woadshot\"],NoGravity:1b,PickupDelay:32767,Item:{id:\"minecraft:bone_meal\",count:1}}");
+                    net.sendCommand("summon item ^ ^1 ^3 {Tags:[\"woadshot\"],NoGravity:1b,PickupDelay:32767,Item:{id:\"minecraft:bone\",count:1}}");
+                    net.sendCommand("summon item ^1 ^1 ^3 {Tags:[\"woadshot\"],NoGravity:1b,PickupDelay:32767,Item:{id:\"minecraft:bone_meal\",count:1}}");
+                });
+                act(mc -> {});
+                grab("archer_shown");
+                act(mc -> {
+                    for (var setting : com.pureblue.woad.core.FeatureManager.RENDER_OPTIMIZER.getSettings()) {
+                        if (setting.getName().equals("Hide archer passive")) ((com.pureblue.woad.core.setting.BooleanSetting) setting).toggle();
+                    }
+                    com.pureblue.woad.config.ConfigStore.save();
+                    var net = mc.player.connection;
+                    net.sendCommand("kill @e[tag=woadshot]");
+                    net.sendCommand("scoreboard objectives remove woadshot");
+                    net.sendCommand("team remove woadshot");
+                });
+                WoadScreen menu = new WoadScreen();
+                open(menu);
+                act(mc -> menu.selectFeature("Render Optimizer"));
+                grab("archer_menu");
             }
             default -> grab("unknown_sequence");
         }
